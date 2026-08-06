@@ -2,6 +2,8 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using System.IO;
+using System.Windows.Media;
+using Forms = System.Windows.Forms;
 
 namespace LiveDanmakuOverlay;
 
@@ -15,6 +17,10 @@ public partial class ControlCenterWindow : Window
     private readonly Action _accountChanged;
     private CancellationTokenSource? _loginCts;
     private bool _initializing = true;
+    private bool _isDraggingWindow;
+    private System.Drawing.Point _dragStartCursor;
+    private double _dragStartLeft;
+    private double _dragStartTop;
 
     public ControlCenterWindow(AppSettings settings, MessageFilter filter, HistoryStore history,
         IPlatformAccountProvider account, Action settingsChanged, Action accountChanged)
@@ -287,5 +293,67 @@ public partial class ControlCenterWindow : Window
         bitmap.EndInit();
         bitmap.Freeze();
         return bitmap;
+    }
+
+    private void ControlMinimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void ControlMaximize_Click(object sender, RoutedEventArgs e) =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    private void ControlClose_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void ControlWindow_StateChanged(object? sender, EventArgs e)
+    {
+        if (ControlMaximizeButton is null || ControlSurface is null) return;
+        var maximized = WindowState == WindowState.Maximized;
+        ControlMaximizeButton.Content = maximized ? "❐" : "□";
+        ControlMaximizeButton.ToolTip = maximized ? "还原" : "最大化";
+        ControlSurface.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(10);
+    }
+
+    private void ControlTitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (IsInsideButton(e.OriginalSource as DependencyObject)) return;
+        if (e.ClickCount == 2)
+        {
+            ControlMaximize_Click(sender, e);
+            return;
+        }
+        if (WindowState != WindowState.Normal) return;
+        _isDraggingWindow = true;
+        _dragStartCursor = Forms.Cursor.Position;
+        _dragStartLeft = Left;
+        _dragStartTop = Top;
+        Mouse.Capture(ControlTitleBar);
+        e.Handled = true;
+    }
+
+    private void ControlTitleBar_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_isDraggingWindow || e.LeftButton != MouseButtonState.Pressed) return;
+        var cursor = Forms.Cursor.Position;
+        var dpi = VisualTreeHelper.GetDpi(this);
+        Left = _dragStartLeft + (cursor.X - _dragStartCursor.X) / dpi.DpiScaleX;
+        Top = _dragStartTop + (cursor.Y - _dragStartCursor.Y) / dpi.DpiScaleY;
+    }
+
+    private void ControlTitleBar_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => EndControlWindowDrag();
+    private void ControlTitleBar_LostMouseCapture(object sender, System.Windows.Input.MouseEventArgs e) => EndControlWindowDrag();
+
+    private void EndControlWindowDrag()
+    {
+        if (!_isDraggingWindow) return;
+        _isDraggingWindow = false;
+        if (Mouse.Captured == ControlTitleBar) Mouse.Capture(null);
+    }
+
+    private static bool IsInsideButton(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is System.Windows.Controls.Primitives.ButtonBase) return true;
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return false;
     }
 }

@@ -2,7 +2,8 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="弹幕姬 · 控制中心" Width="1040" Height="700" MinWidth="860" MinHeight="560"
-        WindowStartupLocation="CenterScreen" Background="#FFF5F6FA"
+        WindowStartupLocation="CenterScreen" Background="#FFF5F6FA" WindowStyle="None" ResizeMode="CanResize"
+        StateChanged="ControlWindow_StateChanged"
         FontFamily="Microsoft YaHei UI" FontSize="13" Foreground="#FF202534">
     <Window.Resources>
         <SolidColorBrush x:Key="AccentBrush" Color="#FF6C5CE7"/>
@@ -11,6 +12,13 @@
         <SolidColorBrush x:Key="LineBrush" Color="#FFE6E8EF"/>
 
         <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#FF202534"/></Style>
+
+        <Style x:Key="WindowCaptionButton" TargetType="Button">
+            <Setter Property="Foreground" Value="#FF4B5263"/><Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/><Setter Property="Width" Value="44"/><Setter Property="Height" Value="34"/>
+            <Setter Property="Padding" Value="0"/><Setter Property="FontSize" Value="15"/><Setter Property="Cursor" Value="Arrow"/>
+            <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button"><Border x:Name="CaptionRoot" Background="{TemplateBinding Background}" CornerRadius="6"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="CaptionRoot" Property="Background" Value="#FFE9EBF1"/></Trigger><Trigger Property="IsPressed" Value="True"><Setter TargetName="CaptionRoot" Property="Background" Value="#FFDDE0E8"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter>
+        </Style>
 
         <Style TargetType="Button">
             <Setter Property="Foreground" Value="White"/>
@@ -76,7 +84,17 @@
         <Style x:Key="PageDescription" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}"><Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/><Setter Property="Margin" Value="0,6,0,20"/></Style>
     </Window.Resources>
 
-    <Grid Margin="22">
+    <Border x:Name="ControlSurface" Background="#FFF5F6FA" BorderBrush="#FFDDE1EA" BorderThickness="1" CornerRadius="10">
+      <Grid>
+        <Grid.RowDefinitions><RowDefinition Height="42"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <Grid x:Name="ControlTitleBar" Margin="8,4,4,0" MouseLeftButtonDown="ControlTitleBar_MouseLeftButtonDown" MouseMove="ControlTitleBar_MouseMove" MouseLeftButtonUp="ControlTitleBar_MouseLeftButtonUp" LostMouseCapture="ControlTitleBar_LostMouseCapture">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBlock Text="弹幕姬 · 控制中心" VerticalAlignment="Center" Margin="8,0,0,0" FontWeight="SemiBold"/>
+            <Button Grid.Column="1" Content="—" Style="{StaticResource WindowCaptionButton}" Click="ControlMinimize_Click" ToolTip="最小化"/>
+            <Button x:Name="ControlMaximizeButton" Grid.Column="2" Content="□" Style="{StaticResource WindowCaptionButton}" Click="ControlMaximize_Click" ToolTip="最大化"/>
+            <Button Grid.Column="3" Content="×" Style="{StaticResource WindowCaptionButton}" Click="ControlClose_Click" ToolTip="关闭"/>
+        </Grid>
+        <Grid Grid.Row="1" Margin="22,10,22,22">
         <TabControl TabStripPlacement="Left">
             <TabItem Header="账号与平台">
                 <StackPanel>
@@ -157,5 +175,7 @@
                 </StackPanel>
             </TabItem>
         </TabControl>
-    </Grid>
+        </Grid>
+      </Grid>
+    </Border>
 </Window>

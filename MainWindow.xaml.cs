@@ -33,6 +33,10 @@ public partial class MainWindow : Window
     private string _currentRoom = "";
     private ControlCenterWindow? _controlCenter;
     private WindowState _stateBeforeMinimize = WindowState.Normal;
+    private bool _isDraggingWindow;
+    private System.Drawing.Point _dragStartCursor;
+    private double _dragStartLeft;
+    private double _dragStartTop;
 
     public MainWindow()
     {
@@ -248,15 +252,54 @@ public partial class MainWindow : Window
         MaximizeButton.ToolTip = maximized ? "还原" : "最大化";
         Surface.CornerRadius = maximized ? new CornerRadius(0) : new CornerRadius(12);
         ResizeThumb.Visibility = maximized || _isLocked ? Visibility.Collapsed : Visibility.Visible;
+        Dispatcher.InvokeAsync(UpdateDisplayArea, System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (!_isLocked && e.ButtonState == MouseButtonState.Pressed &&
-            e.OriginalSource is not System.Windows.Controls.Primitives.ButtonBase &&
-            e.OriginalSource is not System.Windows.Controls.Primitives.Thumb &&
-            e.OriginalSource is not System.Windows.Controls.TextBox)
-            DragMove();
+            !IsWithinInteractiveControl(e.OriginalSource as DependencyObject) && WindowState == WindowState.Normal)
+        {
+            _isDraggingWindow = true;
+            _dragStartCursor = Forms.Cursor.Position;
+            _dragStartLeft = Left;
+            _dragStartTop = Top;
+            Mouse.Capture(this);
+            e.Handled = true;
+        }
+    }
+
+    private void Window_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_isDraggingWindow || e.LeftButton != MouseButtonState.Pressed) return;
+        var cursor = Forms.Cursor.Position;
+        var dpi = VisualTreeHelper.GetDpi(this);
+        Left = _dragStartLeft + (cursor.X - _dragStartCursor.X) / dpi.DpiScaleX;
+        Top = _dragStartTop + (cursor.Y - _dragStartCursor.Y) / dpi.DpiScaleY;
+    }
+
+    private void Window_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => EndWindowDrag();
+    private void Window_LostMouseCapture(object sender, System.Windows.Input.MouseEventArgs e) => EndWindowDrag();
+
+    private void EndWindowDrag()
+    {
+        if (!_isDraggingWindow) return;
+        _isDraggingWindow = false;
+        if (Mouse.Captured == this) Mouse.Capture(null);
+        SaveSettings();
+    }
+
+    private static bool IsWithinInteractiveControl(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is System.Windows.Controls.Primitives.ButtonBase or
+                System.Windows.Controls.Primitives.Thumb or System.Windows.Controls.TextBox or
+                System.Windows.Controls.ComboBox or System.Windows.Controls.Slider)
+                return true;
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return false;
     }
 
     private void FontSizeCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -309,13 +352,24 @@ public partial class MainWindow : Window
         Surface.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(alpha, 24, 26, 32));
     }
 
-    private void BarrageAreaHost_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateDisplayArea();
+    private void BarrageAreaHost_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateDisplayArea(e.NewSize.Height);
 
-    private void UpdateDisplayArea()
+    private void UpdateDisplayArea() => UpdateDisplayArea(BarrageAreaHost?.ActualHeight ?? 0);
+
+    private void UpdateDisplayArea(double hostHeight)
     {
-        if (BarrageAreaHost is null || BarrageCanvas is null || BarrageAreaHost.ActualHeight <= 0) return;
+        if (BarrageAreaHost is null || BarrageCanvas is null || hostHeight <= 0) return;
         var percent = Math.Clamp(_settings.DisplayAreaPercent, 10, 100) / 100.0;
-        BarrageCanvas.Height = Math.Max(1, BarrageAreaHost.ActualHeight * percent);
+        if (percent >= 1)
+        {
+            BarrageCanvas.ClearValue(HeightProperty);
+            BarrageCanvas.VerticalAlignment = VerticalAlignment.Stretch;
+        }
+        else
+        {
+            BarrageCanvas.VerticalAlignment = VerticalAlignment.Top;
+            BarrageCanvas.Height = Math.Max(1, hostHeight * percent);
+        }
         _barrageRenderer?.RefreshLanes();
     }
 
