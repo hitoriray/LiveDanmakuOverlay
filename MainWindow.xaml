@@ -8,7 +8,7 @@
         Height="620" Width="420" MinHeight="260" MinWidth="300"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ResizeMode="CanResizeWithGrip"
-        Loaded="Window_Loaded" Closing="Window_Closing"
+        Loaded="Window_Loaded" Closing="Window_Closing" StateChanged="Window_StateChanged"
         MouseLeftButtonDown="Window_MouseLeftButtonDown">
     <Window.Resources>
         <Style x:Key="SmallButton" TargetType="Button">
@@ -38,12 +38,21 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="直播弹幕" Foreground="White" FontSize="17" FontWeight="SemiBold"
                            VerticalAlignment="Center"/>
-                <Button Grid.Column="1" Content="功能" Click="ControlCenterButton_Click" Style="{StaticResource SmallButton}"/>
-                <Button Grid.Column="2" Content="锁定" Click="LockButton_Click" Style="{StaticResource SmallButton}"/>
-                <Button Grid.Column="3" Content="×" Click="HideButton_Click" Style="{StaticResource SmallButton}"
+                <Button x:Name="DanmakuToggleButton" Grid.Column="1" Content="弹幕开" Click="DanmakuToggleButton_Click"
+                        Style="{StaticResource SmallButton}" ToolTip="开启或关闭弹幕显示"/>
+                <Button Grid.Column="2" Content="功能" Click="ControlCenterButton_Click" Style="{StaticResource SmallButton}"/>
+                <Button Grid.Column="3" Content="锁定" Click="LockButton_Click" Style="{StaticResource SmallButton}"/>
+                <Button Grid.Column="4" Content="—" Click="MinimizeButton_Click" Style="{StaticResource SmallButton}"
+                        FontSize="16" Padding="9,1" ToolTip="最小化到托盘"/>
+                <Button x:Name="MaximizeButton" Grid.Column="5" Content="□" Click="MaximizeButton_Click" Style="{StaticResource SmallButton}"
+                        FontSize="16" Padding="9,1" ToolTip="最大化"/>
+                <Button Grid.Column="6" Content="×" Click="HideButton_Click" Style="{StaticResource SmallButton}"
                         FontSize="18" Padding="9,1"/>
             </Grid>
 
@@ -58,25 +67,39 @@
                         Click="ConnectButton_Click" Style="{StaticResource AccentButton}"/>
             </Grid>
 
-            <Canvas x:Name="BarrageCanvas" Grid.Row="2" ClipToBounds="True" Background="Transparent"
-                    MinHeight="80" SizeChanged="BarrageCanvas_SizeChanged"/>
+            <Grid x:Name="BarrageAreaHost" Grid.Row="2" MinHeight="80" SizeChanged="BarrageAreaHost_SizeChanged">
+                <Canvas x:Name="BarrageCanvas" ClipToBounds="True" Background="Transparent"
+                        VerticalAlignment="Top" HorizontalAlignment="Stretch"/>
+            </Grid>
 
             <StackPanel x:Name="StatusPanel" Grid.Row="3" Margin="0,9,18,0">
                 <TextBlock x:Name="StatusText" Text="尚未连接" Foreground="#BFFFFFFF" FontSize="12"
                            TextTrimming="CharacterEllipsis" Margin="0,0,0,5"/>
                 <WrapPanel Orientation="Horizontal">
                     <TextBlock Text="字号" Foreground="#BFFFFFFF" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                    <Slider x:Name="FontSizeSlider" Width="65" Minimum="12" Maximum="32" Value="18"
-                            ValueChanged="FontSizeSlider_ValueChanged"/>
+                    <ComboBox x:Name="FontSizeCombo" Width="58" Height="25" SelectionChanged="FontSizeCombo_SelectionChanged">
+                        <ComboBoxItem Content="小" Tag="14"/><ComboBoxItem Content="中" Tag="18"/><ComboBoxItem Content="大" Tag="24"/>
+                    </ComboBox>
                     <TextBlock Text="速度" Foreground="#BFFFFFFF" VerticalAlignment="Center" Margin="9,0,4,0"/>
-                    <Slider x:Name="SpeedSlider" Width="65" Minimum="50" Maximum="220" Value="100"
-                            ValueChanged="SpeedSlider_ValueChanged" ToolTip="每秒移动的像素数"/>
+                    <ComboBox x:Name="SpeedCombo" Width="58" Height="25" SelectionChanged="SpeedCombo_SelectionChanged">
+                        <ComboBoxItem Content="慢" Tag="70"/><ComboBoxItem Content="中" Tag="110"/><ComboBoxItem Content="快" Tag="170"/>
+                    </ComboBox>
+                    <TextBlock Text="区域" Foreground="#BFFFFFFF" VerticalAlignment="Center" Margin="9,0,4,0"/>
+                    <ComboBox x:Name="DisplayAreaCombo" Width="62" Height="25" SelectionChanged="DisplayAreaCombo_SelectionChanged">
+                        <ComboBoxItem Content="10%" Tag="10"/><ComboBoxItem Content="25%" Tag="25"/>
+                        <ComboBoxItem Content="50%" Tag="50"/><ComboBoxItem Content="75%" Tag="75"/>
+                        <ComboBoxItem Content="100%" Tag="100"/>
+                    </ComboBox>
                     <TextBlock Text="背景" Foreground="#BFFFFFFF" VerticalAlignment="Center" Margin="9,0,4,0"/>
-                    <Slider x:Name="OpacitySlider" Width="55" Minimum="0" Maximum="0.95" Value="0.45"
+                    <Slider x:Name="OpacitySlider" Width="55" Minimum="0" Maximum="1" Value="0.5"
+                            TickFrequency="0.1" IsSnapToTickEnabled="True"
                             ValueChanged="OpacitySlider_ValueChanged"/>
+                    <TextBlock x:Name="BackgroundOpacityValue" Width="35" Foreground="#BFFFFFFF" VerticalAlignment="Center"/>
                     <TextBlock Text="文字" Foreground="#BFFFFFFF" VerticalAlignment="Center" Margin="9,0,4,0"/>
-                    <Slider x:Name="TextOpacitySlider" Width="55" Minimum="0.15" Maximum="1" Value="1"
+                    <Slider x:Name="TextOpacitySlider" Width="55" Minimum="0.1" Maximum="1" Value="1"
+                            TickFrequency="0.1" IsSnapToTickEnabled="True"
                             ValueChanged="TextOpacitySlider_ValueChanged" ToolTip="文字和表情的透明度"/>
+                    <TextBlock x:Name="TextOpacityValue" Width="35" Foreground="#BFFFFFFF" VerticalAlignment="Center"/>
                 </WrapPanel>
             </StackPanel>
 

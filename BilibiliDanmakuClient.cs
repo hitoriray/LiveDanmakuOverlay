@@ -17,12 +17,15 @@ public sealed class BilibiliDanmakuClient : IAsyncDisposable
         27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13
     ];
     private static readonly HttpClient Http = CreateHttpClient();
+    private readonly IPlatformAccountProvider? _account;
     private readonly SemaphoreSlim _switchLock = new(1, 1);
     private CancellationTokenSource? _connectionCts;
     private Task? _connectionTask;
 
     public event EventHandler<DanmakuMessage>? MessageReceived;
     public event EventHandler<string>? StatusChanged;
+
+    public BilibiliDanmakuClient(IPlatformAccountProvider? account = null) => _account = account;
 
     public async Task ConnectAsync(string roomInput)
     {
@@ -65,6 +68,8 @@ public sealed class BilibiliDanmakuClient : IAsyncDisposable
                 using var socket = new ClientWebSocket();
                 socket.Options.SetRequestHeader("Origin", "https://live.bilibili.com");
                 socket.Options.SetRequestHeader("User-Agent", "Mozilla/5.0 LiveDanmakuOverlay/0.1");
+                if (!string.IsNullOrWhiteSpace(_account?.CookieHeader))
+                    socket.Options.SetRequestHeader("Cookie", _account.CookieHeader);
                 await socket.ConnectAsync(info.ServerUri, cancellationToken);
                 await SendPacketAsync(socket, 7, BuildAuthBody(info), cancellationToken);
 
@@ -167,13 +172,30 @@ public sealed class BilibiliDanmakuClient : IAsyncDisposable
 
             var info = root.GetProperty("info");
             var text = info[1].GetString() ?? "";
-            var user = info[2][1].GetString() ?? "匿名";
+            var user = ParseFullUserName(info) ?? info[2][1].GetString() ?? "匿名";
             var (emoticonUrl, emoticonWidth, emoticonHeight) = ParseEmoticon(info);
             if (!string.IsNullOrWhiteSpace(text))
                 MessageReceived?.Invoke(this, new DanmakuMessage(user, text, emoticonUrl, emoticonWidth, emoticonHeight));
         }
         catch (JsonException) { }
         catch (InvalidOperationException) { }
+    }
+
+    private static string? ParseFullUserName(JsonElement info)
+    {
+        try
+        {
+            if (info[0].GetArrayLength() <= 15) return null;
+            var modeInfo = info[0][15];
+            if (modeInfo.ValueKind != JsonValueKind.Object ||
+                !modeInfo.TryGetProperty("user", out var user) ||
+                !user.TryGetProperty("base", out var userBase) ||
+                !userBase.TryGetProperty("name", out var name)) return null;
+            var value = name.GetString();
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+        catch (InvalidOperationException) { return null; }
+        catch (IndexOutOfRangeException) { return null; }
     }
 
     private static (string? Url, int Width, int Height) ParseEmoticon(JsonElement info)
@@ -231,9 +253,9 @@ public sealed class BilibiliDanmakuClient : IAsyncDisposable
         await socket.SendAsync(packet, WebSocketMessageType.Binary, true, cancellationToken);
     }
 
-    private static string BuildAuthBody(ConnectionInfo info) => JsonSerializer.Serialize(new
+    private string BuildAuthBody(ConnectionInfo info) => JsonSerializer.Serialize(new
     {
-        uid = 0,
+        uid = _account?.Status.IsLoggedIn == true ? _account.Status.UserId : 0,
         roomid = info.RoomId,
         protover = 3,
         buvid = info.Buvid,
@@ -242,7 +264,7 @@ public sealed class BilibiliDanmakuClient : IAsyncDisposable
         key = info.Token
     });
 
-    private static async Task<ConnectionInfo> ResolveConnectionAsync(long shortRoomId, CancellationToken cancellationToken)
+    private async Task<ConnectionInfo> ResolveConnectionAsync(long shortRoomId, CancellationToken cancellationToken)
     {
         var buvid = await GetBuvidAsync(cancellationToken);
         using var roomDoc = await GetJsonAsync($"https://api.live.bilibili.com/room/v1/Room/room_init?id={shortRoomId}", buvid, cancellationToken);
@@ -260,7 +282,7 @@ public sealed class BilibiliDanmakuClient : IAsyncDisposable
         return new ConnectionInfo(roomId, new Uri($"wss://{hostName}:{port}/sub"), token, buvid);
     }
 
-    private static async Task<string> CreateWbiSignedQueryAsync(long roomId, string buvid, CancellationToken cancellationToken)
+    private async Task<string> CreateWbiSignedQueryAsync(long roomId, string buvid, CancellationToken cancellationToken)
     {
         using var navDoc = await GetJsonAsync("https://api.bilibili.com/x/web-interface/nav", buvid, cancellationToken);
         var wbiImage = navDoc.RootElement.GetProperty("data").GetProperty("wbi_img");
@@ -283,7 +305,7 @@ public sealed class BilibiliDanmakuClient : IAsyncDisposable
         return Path.GetFileNameWithoutExtension(uri.AbsolutePath);
     }
 
-    private static async Task<string> GetBuvidAsync(CancellationToken cancellationToken)
+    private async Task<string> GetBuvidAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -293,11 +315,14 @@ public sealed class BilibiliDanmakuClient : IAsyncDisposable
         catch { return ""; }
     }
 
-    private static async Task<JsonDocument> GetJsonAsync(string url, string? buvid, CancellationToken cancellationToken)
+    private async Task<JsonDocument> GetJsonAsync(string url, string? buvid, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Referrer = new Uri("https://live.bilibili.com/");
-        if (!string.IsNullOrWhiteSpace(buvid)) request.Headers.TryAddWithoutValidation("Cookie", $"buvid3={buvid}");
+        var cookie = _account?.CookieHeader ?? "";
+        if (!string.IsNullOrWhiteSpace(buvid) && !cookie.Contains("buvid3=", StringComparison.OrdinalIgnoreCase))
+            cookie = string.IsNullOrWhiteSpace(cookie) ? $"buvid3={buvid}" : $"{cookie}; buvid3={buvid}";
+        if (!string.IsNullOrWhiteSpace(cookie)) request.Headers.TryAddWithoutValidation("Cookie", cookie);
         using var response = await Http.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);

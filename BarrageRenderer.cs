@@ -5,12 +5,17 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Globalization;
+using System.Text;
+using System.Windows.Documents;
+using System.Windows.Media.Animation;
 
 namespace LiveDanmakuOverlay;
 
 public sealed class BarrageRenderer : IDisposable
 {
     private const double LaneGap = 28;
+    private static readonly System.Windows.Media.FontFamily EmojiFont = new("Segoe UI Emoji");
     private static readonly HttpClient ImageHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
     private static readonly ConcurrentDictionary<string, Task<ImageSource?>> ImageCache = new();
     private readonly Canvas _canvas;
@@ -26,10 +31,10 @@ public sealed class BarrageRenderer : IDisposable
     private long _totalLaunched;
     private long _totalMerged;
     private long _totalExpired;
-    private double _speedBoost = 1;
     private DateTime _lastDuplicateCleanup = DateTime.UtcNow;
     private TimeSpan _lastRenderingTime;
     private DateTime _lastStatisticsReport = DateTime.MinValue;
+    private volatile bool _enabled = true;
 
     public double ScrollSpeed { get; private set; }
     public int PendingCount => Volatile.Read(ref _pendingCount);
@@ -58,6 +63,11 @@ public sealed class BarrageRenderer : IDisposable
     public void Enqueue(DanmakuMessage message)
     {
         Interlocked.Increment(ref _totalAccepted);
+        if (!_enabled)
+        {
+            Interlocked.Increment(ref _totalExpired);
+            return;
+        }
         var nowTicks = DateTime.UtcNow.Ticks;
         var duplicateKey = MessageFilter.Normalize(message.Text);
         if (duplicateKey.Length > 0 && _recentMessages.TryGetValue(duplicateKey, out var previousTicks) &&
@@ -76,6 +86,7 @@ public sealed class BarrageRenderer : IDisposable
     public void SetFontSize(double fontSize)
     {
         _fontSize = fontSize;
+        StopActiveAnimations();
         _canvas.Children.Clear();
         _active.Clear();
         _lanes.Clear();
@@ -87,6 +98,7 @@ public sealed class BarrageRenderer : IDisposable
         if (Math.Abs(ScrollSpeed - scrollSpeed) < 0.1) return;
         ScrollSpeed = scrollSpeed;
         // Every item in one lane uses the same speed, so a later item cannot catch the item ahead.
+        StopActiveAnimations();
         _canvas.Children.Clear();
         _active.Clear();
         _lanes.Clear();
@@ -96,8 +108,29 @@ public sealed class BarrageRenderer : IDisposable
 
     public void SetContentOpacity(double opacity)
     {
-        _contentOpacity = Math.Clamp(opacity, 0.15, 1);
+        _contentOpacity = Math.Clamp(opacity, 0.1, 1);
         foreach (UIElement element in _canvas.Children) element.Opacity = _contentOpacity;
+    }
+
+    public void SetEnabled(bool enabled)
+    {
+        _enabled = enabled;
+        if (enabled)
+        {
+            RefreshLanes();
+            return;
+        }
+
+        StopActiveAnimations();
+        _canvas.Children.Clear();
+        _active.Clear();
+        _lanes.Clear();
+        while (_pending.TryDequeue(out _))
+        {
+            Interlocked.Decrement(ref _pendingCount);
+            Interlocked.Increment(ref _totalExpired);
+        }
+        ReportPendingCount();
     }
 
     public void RefreshLanes()
@@ -124,35 +157,17 @@ public sealed class BarrageRenderer : IDisposable
         }
         var elapsedSeconds = (renderingTime - _lastRenderingTime).TotalSeconds;
         _lastRenderingTime = renderingTime;
-        if (elapsedSeconds <= 0 || elapsedSeconds > 0.25) elapsedSeconds = 1.0 / 60;
+        if (elapsedSeconds <= 0) return;
+        // WPF input, resizing and DataGrid scrolling share the UI thread with rendering. Never
+        // compensate a delayed frame with a large jump: a temporary slowdown is less disruptive.
+        elapsedSeconds = Math.Min(elapsedSeconds, 1.0 / 30);
 
         CleanupDuplicateIndex();
-        UpdateSpeedBoost();
-        AdvanceActiveBarrages(elapsedSeconds);
         TryLaunchPending();
         if ((DateTime.UtcNow - _lastStatisticsReport).TotalMilliseconds >= 250)
         {
             _lastStatisticsReport = DateTime.UtcNow;
             ReportPendingCount();
-        }
-    }
-
-    private void AdvanceActiveBarrages(double elapsedSeconds)
-    {
-        for (var index = _active.Count - 1; index >= 0; index--)
-        {
-            var item = _active[index];
-            item.X -= ScrollSpeed * _speedBoost * elapsedSeconds;
-            item.Transform.X = item.X;
-            if (item.X > -item.Width) continue;
-
-            _canvas.Children.Remove(item.Element);
-            _active.RemoveAt(index);
-            if (_lanes.Count > item.LaneIndex && ReferenceEquals(_lanes[item.LaneIndex].LastElement, item.Element))
-            {
-                _lanes[item.LaneIndex].LastElement = null;
-                _lanes[item.LaneIndex].Transform = null;
-            }
         }
     }
 
@@ -211,7 +226,30 @@ public sealed class BarrageRenderer : IDisposable
         _canvas.Children.Add(element);
         _lanes[laneIndex].LastElement = element;
         _lanes[laneIndex].Transform = transform;
-        _active.Add(new ActiveBarrage(element, transform, start, contentWidth, laneIndex));
+        var active = new ActiveBarrage(element, transform, contentWidth, laneIndex);
+        _active.Add(active);
+        var animation = new DoubleAnimation
+        {
+            From = start,
+            To = -contentWidth,
+            Duration = TimeSpan.FromSeconds((start + contentWidth) / ScrollSpeed),
+            FillBehavior = FillBehavior.HoldEnd
+        };
+        animation.Completed += (_, _) => CompleteBarrage(active);
+        transform.BeginAnimation(TranslateTransform.XProperty, animation, HandoffBehavior.SnapshotAndReplace);
+    }
+
+    private void CompleteBarrage(ActiveBarrage item)
+    {
+        if (!_active.Remove(item)) return;
+        item.Transform.BeginAnimation(TranslateTransform.XProperty, null);
+        _canvas.Children.Remove(item.Element);
+        if (_lanes.Count > item.LaneIndex && ReferenceEquals(_lanes[item.LaneIndex].LastElement, item.Element))
+        {
+            _lanes[item.LaneIndex].LastElement = null;
+            _lanes[item.LaneIndex].Transform = null;
+        }
+        TryLaunchPending();
     }
 
     private FrameworkElement CreateElement(DanmakuMessage message)
@@ -224,15 +262,89 @@ public sealed class BarrageRenderer : IDisposable
     {
         var block = new TextBlock
         {
-            Text = text,
             Foreground = System.Windows.Media.Brushes.White,
             FontSize = _fontSize,
             FontWeight = System.Windows.FontWeights.SemiBold,
             TextWrapping = System.Windows.TextWrapping.NoWrap,
             Opacity = _contentOpacity,
         };
-        TextOptions.SetTextRenderingMode(block, TextRenderingMode.Grayscale);
+        AddTextWithColorEmoji(block, text);
+        TextOptions.SetTextRenderingMode(block, TextRenderingMode.Auto);
         return block;
+    }
+
+    private void AddTextWithColorEmoji(TextBlock block, string text)
+    {
+        var enumerator = StringInfo.GetTextElementEnumerator(text);
+        var buffer = new StringBuilder();
+        bool? bufferIsEmoji = null;
+        while (enumerator.MoveNext())
+        {
+            var element = enumerator.GetTextElement();
+            var isEmoji = IsEmojiElement(element);
+            if (bufferIsEmoji.HasValue && bufferIsEmoji.Value != isEmoji)
+            {
+                AddTextPart(block, buffer.ToString(), bufferIsEmoji.Value);
+                buffer.Clear();
+            }
+            bufferIsEmoji = isEmoji;
+            buffer.Append(element);
+        }
+        if (buffer.Length > 0) AddTextPart(block, buffer.ToString(), bufferIsEmoji == true);
+    }
+
+    private void AddTextPart(TextBlock block, string text, bool emoji)
+    {
+        if (!emoji)
+        {
+            block.Inlines.Add(new Run(text));
+            return;
+        }
+
+        var enumerator = StringInfo.GetTextElementEnumerator(text);
+        while (enumerator.MoveNext()) AddEmojiInline(block, enumerator.GetTextElement());
+    }
+
+    private void AddEmojiInline(TextBlock block, string element)
+    {
+        var size = _fontSize + 4;
+        var container = new Grid { Width = size, Height = size };
+        var fallback = new TextBlock
+        {
+            Text = element,
+            FontFamily = EmojiFont,
+            FontWeight = FontWeights.Normal,
+            FontSize = _fontSize,
+            Foreground = System.Windows.Media.Brushes.White,
+            TextAlignment = TextAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var source = WindowsEmojiRenderer.Render(element, _fontSize);
+        var image = new System.Windows.Controls.Image
+        {
+            Stretch = Stretch.Uniform,
+            Source = source,
+            Visibility = source is null ? Visibility.Hidden : Visibility.Visible
+        };
+        fallback.Visibility = source is null ? Visibility.Visible : Visibility.Collapsed;
+        container.Children.Add(fallback);
+        container.Children.Add(image);
+        block.Inlines.Add(new InlineUIContainer(container) { BaselineAlignment = BaselineAlignment.Center });
+    }
+
+    private static bool IsEmojiElement(string element)
+    {
+        foreach (var rune in element.EnumerateRunes())
+        {
+            var value = rune.Value;
+            if (value == 0xFE0F || value == 0x200D || value == 0x20E3 ||
+                value is >= 0x1F000 and <= 0x1FAFF ||
+                value is >= 0x2600 and <= 0x27BF ||
+                value is >= 0x1F1E6 and <= 0x1F1FF ||
+                value is >= 0x1F3FB and <= 0x1F3FF)
+                return true;
+        }
+        return false;
     }
 
     private FrameworkElement CreateEmoticonElement(DanmakuMessage message)
@@ -289,15 +401,7 @@ public sealed class BarrageRenderer : IDisposable
             PendingCountChanged?.Invoke(this, count);
         }
         StatisticsChanged?.Invoke(this, new BarrageStatistics(TotalAccepted, TotalLaunched, TotalMerged,
-            TotalExpired, count, _speedBoost));
-    }
-
-    private void UpdateSpeedBoost()
-    {
-        var laneCount = Math.Max(1, _lanes.Count);
-        var newBoost = PendingCount >= laneCount * 2 ? 1.5 : PendingCount >= laneCount ? 1.25 : 1;
-        if (Math.Abs(newBoost - _speedBoost) < 0.01) return;
-        _speedBoost = newBoost;
+            TotalExpired, count, 1));
     }
 
     private void CleanupDuplicateIndex()
@@ -315,8 +419,15 @@ public sealed class BarrageRenderer : IDisposable
     public void Dispose()
     {
         CompositionTarget.Rendering -= CompositionTarget_Rendering;
+        StopActiveAnimations();
         _canvas.Children.Clear();
         _active.Clear();
+    }
+
+    private void StopActiveAnimations()
+    {
+        foreach (var item in _active)
+            item.Transform.BeginAnimation(TranslateTransform.XProperty, null);
     }
 
     private sealed class LaneState
@@ -327,11 +438,10 @@ public sealed class BarrageRenderer : IDisposable
 
     private sealed record PendingMessage(DanmakuMessage Message, DateTime ReceivedAt);
     private sealed class ActiveBarrage(FrameworkElement element, TranslateTransform transform,
-        double x, double width, int laneIndex)
+        double width, int laneIndex)
     {
         public FrameworkElement Element { get; } = element;
         public TranslateTransform Transform { get; } = transform;
-        public double X { get; set; } = x;
         public double Width { get; } = width;
         public int LaneIndex { get; } = laneIndex;
     }

@@ -10,6 +10,27 @@ public sealed class MessageFilter
 
     public MessageFilter(AppSettings settings) => _settings = settings;
 
+    public bool IsBlocked(DanmakuMessage message, out string? reason)
+    {
+        lock (_sync)
+        {
+            var blockedUser = _settings.BlockedUsers.FirstOrDefault(user =>
+                string.Equals(user.Trim(), message.UserName.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (blockedUser is not null)
+            {
+                reason = $"用户：{blockedUser}";
+                return true;
+            }
+        }
+        if (IsBlocked(message.Text, out var keyword))
+        {
+            reason = $"关键词：{keyword}";
+            return true;
+        }
+        reason = null;
+        return false;
+    }
+
     public bool IsBlocked(string text, out string? matchedKeyword)
     {
         var normalizedText = Normalize(text);
@@ -49,6 +70,34 @@ public sealed class MessageFilter
     public bool RemoveKeyword(string keyword)
     {
         lock (_sync) return _settings.BlockedKeywords.Remove(keyword);
+    }
+
+    public IReadOnlyList<string> GetBlockedUsers()
+    {
+        lock (_sync) return _settings.BlockedUsers.ToArray();
+    }
+
+    public bool AddUser(string userName)
+    {
+        userName = userName.Trim();
+        if (userName.Length == 0 || userName == "***" || userName == "匿名") return false;
+        lock (_sync)
+        {
+            if (_settings.BlockedUsers.Any(item => string.Equals(item, userName, StringComparison.OrdinalIgnoreCase)))
+                return false;
+            _settings.BlockedUsers.Add(userName);
+            return true;
+        }
+    }
+
+    public bool RemoveUser(string userName)
+    {
+        lock (_sync)
+        {
+            var existing = _settings.BlockedUsers.FirstOrDefault(item =>
+                string.Equals(item, userName, StringComparison.OrdinalIgnoreCase));
+            return existing is not null && _settings.BlockedUsers.Remove(existing);
+        }
     }
 
     public static string Normalize(string value)

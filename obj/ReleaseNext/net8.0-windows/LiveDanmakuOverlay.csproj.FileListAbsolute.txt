@@ -47,3 +47,16 @@ C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\runtimes
 C:\Users\zhanghongzhi\LiveDanmakuOverlay\obj\ReleaseNext\net8.0-windows\LiveDanm.AB234A93.Up2Date
 C:\Users\zhanghongzhi\LiveDanmakuOverlay\obj\ReleaseNext\net8.0-windows\ControlCenterWindow.baml
 C:\Users\zhanghongzhi\LiveDanmakuOverlay\obj\ReleaseNext\net8.0-windows\ControlCenterWindow.g.cs
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\obj\ReleaseNext\net8.0-windows\LiveDanmakuOverlay.sourcelink.json
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\QRCoder.dll
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\HarfBuzzSharp.dll
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\SkiaSharp.dll
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\SkiaSharp.HarfBuzz.dll
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\runtimes\osx\native\libHarfBuzzSharp.dylib
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\runtimes\win-arm64\native\libHarfBuzzSharp.dll
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\runtimes\win-x64\native\libHarfBuzzSharp.dll
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\runtimes\win-x86\native\libHarfBuzzSharp.dll
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\runtimes\osx\native\libSkiaSharp.dylib
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\runtimes\win-arm64\native\libSkiaSharp.dll
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\runtimes\win-x64\native\libSkiaSharp.dll
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\bin\ReleaseNext\net8.0-windows\runtimes\win-x86\native\libSkiaSharp.dll

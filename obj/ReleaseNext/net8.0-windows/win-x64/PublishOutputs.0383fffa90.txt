@@ -1,2 +1,3 @@
 C:\Users\zhanghongzhi\LiveDanmakuOverlay\publish-next\LiveDanmakuOverlay.pdb
+C:\Users\zhanghongzhi\LiveDanmakuOverlay\publish-next\e_sqlite3.dll
 C:\Users\zhanghongzhi\LiveDanmakuOverlay\publish-next\LiveDanmakuOverlay.exe

@@ -18,10 +18,14 @@ public sealed class AppSettings
     public double BackgroundOpacity { get; set; } = 0.45;
     public double ScrollSpeed { get; set; } = 100;
     public double TextOpacity { get; set; } = 1;
+    public double DisplayAreaPercent { get; set; } = 100;
+    public bool DanmakuEnabled { get; set; } = true;
     public double FreshnessSeconds { get; set; } = 1;
     public double DuplicateWindowSeconds { get; set; } = 2;
     public List<string> BlockedKeywords { get; set; } = [];
+    public List<string> BlockedUsers { get; set; } = [];
     public bool SaveBlockedMessages { get; set; } = true;
+    public int HistoryRetentionDays { get; set; } = 30;
     public bool IsLocked { get; set; }
 
     public static AppSettings Load()
