@@ -1,0 +1,341 @@
+using System.Collections.Concurrent;
+using System.IO;
+using System.Net.Http;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+
+namespace LiveDanmakuOverlay;
+
+public sealed class BarrageRenderer : IDisposable
+{
+    private const double LaneGap = 28;
+    private static readonly HttpClient ImageHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static readonly ConcurrentDictionary<string, Task<ImageSource?>> ImageCache = new();
+    private readonly Canvas _canvas;
+    private readonly ConcurrentQueue<PendingMessage> _pending = new();
+    private readonly ConcurrentDictionary<string, long> _recentMessages = new();
+    private readonly List<LaneState> _lanes = [];
+    private readonly List<ActiveBarrage> _active = [];
+    private double _fontSize;
+    private double _contentOpacity;
+    private int _pendingCount;
+    private int _lastReportedPendingCount = -1;
+    private long _totalAccepted;
+    private long _totalLaunched;
+    private long _totalMerged;
+    private long _totalExpired;
+    private double _speedBoost = 1;
+    private DateTime _lastDuplicateCleanup = DateTime.UtcNow;
+    private TimeSpan _lastRenderingTime;
+    private DateTime _lastStatisticsReport = DateTime.MinValue;
+
+    public double ScrollSpeed { get; private set; }
+    public int PendingCount => Volatile.Read(ref _pendingCount);
+    public long TotalAccepted => Interlocked.Read(ref _totalAccepted);
+    public long TotalLaunched => Interlocked.Read(ref _totalLaunched);
+    public long TotalMerged => Interlocked.Read(ref _totalMerged);
+    public long TotalExpired => Interlocked.Read(ref _totalExpired);
+    public double FreshnessSeconds { get; set; } = 1;
+    public double DuplicateWindowSeconds { get; set; } = 2;
+    public event EventHandler<int>? PendingCountChanged;
+    public event EventHandler<BarrageStatistics>? StatisticsChanged;
+
+    public BarrageRenderer(Canvas canvas, double fontSize, double scrollSpeed, double contentOpacity = 1)
+    {
+        _canvas = canvas;
+        _fontSize = fontSize;
+        ScrollSpeed = scrollSpeed;
+        _contentOpacity = contentOpacity;
+
+        RefreshLanes();
+        CompositionTarget.Rendering += CompositionTarget_Rendering;
+    }
+
+    // May be called directly by the WebSocket thread. A concurrent queue prevents thousands of
+    // Dispatcher operations from building up during a burst.
+    public void Enqueue(DanmakuMessage message)
+    {
+        Interlocked.Increment(ref _totalAccepted);
+        var nowTicks = DateTime.UtcNow.Ticks;
+        var duplicateKey = MessageFilter.Normalize(message.Text);
+        if (duplicateKey.Length > 0 && _recentMessages.TryGetValue(duplicateKey, out var previousTicks) &&
+            TimeSpan.FromTicks(nowTicks - previousTicks).TotalSeconds <= DuplicateWindowSeconds)
+        {
+            _recentMessages[duplicateKey] = nowTicks;
+            Interlocked.Increment(ref _totalMerged);
+            return;
+        }
+        if (duplicateKey.Length > 0) _recentMessages[duplicateKey] = nowTicks;
+        _pending.Enqueue(new PendingMessage(message, DateTime.UtcNow));
+        Interlocked.Increment(ref _pendingCount);
+        if (_canvas.Dispatcher.CheckAccess()) TryLaunchPending();
+    }
+
+    public void SetFontSize(double fontSize)
+    {
+        _fontSize = fontSize;
+        _canvas.Children.Clear();
+        _active.Clear();
+        _lanes.Clear();
+        RefreshLanes();
+    }
+
+    public void SetScrollSpeed(double scrollSpeed)
+    {
+        if (Math.Abs(ScrollSpeed - scrollSpeed) < 0.1) return;
+        ScrollSpeed = scrollSpeed;
+        // Every item in one lane uses the same speed, so a later item cannot catch the item ahead.
+        _canvas.Children.Clear();
+        _active.Clear();
+        _lanes.Clear();
+        RefreshLanes();
+        TryLaunchPending();
+    }
+
+    public void SetContentOpacity(double opacity)
+    {
+        _contentOpacity = Math.Clamp(opacity, 0.15, 1);
+        foreach (UIElement element in _canvas.Children) element.Opacity = _contentOpacity;
+    }
+
+    public void RefreshLanes()
+    {
+        if (_canvas.ActualHeight <= 0) return;
+        var laneHeight = _fontSize + 10;
+        var requiredCount = Math.Max(1, (int)Math.Floor(_canvas.ActualHeight / laneHeight));
+        while (_lanes.Count < requiredCount) _lanes.Add(new LaneState());
+        if (_lanes.Count > requiredCount) _lanes.RemoveRange(requiredCount, _lanes.Count - requiredCount);
+    }
+
+    private void CompositionTarget_Rendering(object? sender, EventArgs e)
+    {
+        if (e is not RenderingEventArgs rendering) return;
+        ProcessFrame(rendering.RenderingTime);
+    }
+
+    internal void ProcessFrame(TimeSpan renderingTime)
+    {
+        if (_lastRenderingTime == TimeSpan.Zero)
+        {
+            _lastRenderingTime = renderingTime;
+            return;
+        }
+        var elapsedSeconds = (renderingTime - _lastRenderingTime).TotalSeconds;
+        _lastRenderingTime = renderingTime;
+        if (elapsedSeconds <= 0 || elapsedSeconds > 0.25) elapsedSeconds = 1.0 / 60;
+
+        CleanupDuplicateIndex();
+        UpdateSpeedBoost();
+        AdvanceActiveBarrages(elapsedSeconds);
+        TryLaunchPending();
+        if ((DateTime.UtcNow - _lastStatisticsReport).TotalMilliseconds >= 250)
+        {
+            _lastStatisticsReport = DateTime.UtcNow;
+            ReportPendingCount();
+        }
+    }
+
+    private void AdvanceActiveBarrages(double elapsedSeconds)
+    {
+        for (var index = _active.Count - 1; index >= 0; index--)
+        {
+            var item = _active[index];
+            item.X -= ScrollSpeed * _speedBoost * elapsedSeconds;
+            item.Transform.X = item.X;
+            if (item.X > -item.Width) continue;
+
+            _canvas.Children.Remove(item.Element);
+            _active.RemoveAt(index);
+            if (_lanes.Count > item.LaneIndex && ReferenceEquals(_lanes[item.LaneIndex].LastElement, item.Element))
+            {
+                _lanes[item.LaneIndex].LastElement = null;
+                _lanes[item.LaneIndex].Transform = null;
+            }
+        }
+    }
+
+    private void TryLaunchPending()
+    {
+        if (PendingCount == 0 || _canvas.ActualWidth <= 0 || _canvas.ActualHeight <= 0) return;
+        RefreshLanes();
+
+        while (PendingCount > 0)
+        {
+            var laneIndex = FindAvailableLane();
+            if (!_pending.TryPeek(out var candidate)) break;
+            if ((DateTime.UtcNow - candidate.ReceivedAt).TotalSeconds > FreshnessSeconds)
+            {
+                if (_pending.TryDequeue(out _))
+                {
+                    Interlocked.Decrement(ref _pendingCount);
+                    Interlocked.Increment(ref _totalExpired);
+                }
+                continue;
+            }
+            if (laneIndex < 0 || !_pending.TryDequeue(out candidate)) break;
+            Interlocked.Decrement(ref _pendingCount);
+            Interlocked.Increment(ref _totalLaunched);
+            Launch(candidate.Message, laneIndex);
+        }
+    }
+
+    private int FindAvailableLane()
+    {
+        for (var index = 0; index < _lanes.Count; index++)
+        {
+            var lane = _lanes[index];
+            if (lane.LastElement is null || !_canvas.Children.Contains(lane.LastElement)) return index;
+
+            var currentX = lane.Transform?.X ?? double.NaN;
+            if (!double.IsNaN(currentX) && currentX + lane.LastElement.ActualWidth + LaneGap < _canvas.ActualWidth)
+                return index;
+        }
+        return -1;
+    }
+
+    private void Launch(DanmakuMessage message, int laneIndex)
+    {
+        var element = CreateElement(message);
+        element.Measure(new System.Windows.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var contentWidth = Math.Max(1, element.DesiredSize.Width);
+        element.Width = contentWidth;
+
+        var start = _canvas.ActualWidth;
+        var transform = new TranslateTransform(start, 0);
+        element.RenderTransform = transform;
+
+        Canvas.SetTop(element, laneIndex * (_fontSize + 10));
+        Canvas.SetLeft(element, 0);
+        _canvas.Children.Add(element);
+        _lanes[laneIndex].LastElement = element;
+        _lanes[laneIndex].Transform = transform;
+        _active.Add(new ActiveBarrage(element, transform, start, contentWidth, laneIndex));
+    }
+
+    private FrameworkElement CreateElement(DanmakuMessage message)
+    {
+        if (!string.IsNullOrWhiteSpace(message.EmoticonUrl)) return CreateEmoticonElement(message);
+        return CreateTextElement(message.Text);
+    }
+
+    private TextBlock CreateTextElement(string text)
+    {
+        var block = new TextBlock
+        {
+            Text = text,
+            Foreground = System.Windows.Media.Brushes.White,
+            FontSize = _fontSize,
+            FontWeight = System.Windows.FontWeights.SemiBold,
+            TextWrapping = System.Windows.TextWrapping.NoWrap,
+            Opacity = _contentOpacity,
+        };
+        TextOptions.SetTextRenderingMode(block, TextRenderingMode.Grayscale);
+        return block;
+    }
+
+    private FrameworkElement CreateEmoticonElement(DanmakuMessage message)
+    {
+        var height = _fontSize + 6;
+        var ratio = message.EmoticonWidth > 0 && message.EmoticonHeight > 0
+            ? Math.Clamp((double)message.EmoticonWidth / message.EmoticonHeight, 0.5, 5)
+            : 1;
+        var grid = new Grid { Height = height, Width = height * ratio, Opacity = _contentOpacity };
+        var fallback = CreateTextElement(message.Text);
+        fallback.FontSize = Math.Min(_fontSize, height - 2);
+        fallback.Opacity = 1;
+        var image = new System.Windows.Controls.Image { Stretch = Stretch.Uniform, Visibility = Visibility.Hidden };
+        grid.Children.Add(fallback);
+        grid.Children.Add(image);
+
+        _ = LoadImageAsync(message.EmoticonUrl!).ContinueWith(task =>
+        {
+            if (task.Status != TaskStatus.RanToCompletion || task.Result is null) return;
+            _canvas.Dispatcher.InvokeAsync(() =>
+            {
+                image.Source = task.Result;
+                image.Visibility = Visibility.Visible;
+                fallback.Visibility = Visibility.Collapsed;
+            });
+        }, TaskScheduler.Default);
+        return grid;
+    }
+
+    private static Task<ImageSource?> LoadImageAsync(string url) =>
+        ImageCache.GetOrAdd(url, static async imageUrl =>
+        {
+            try
+            {
+                var bytes = await ImageHttp.GetByteArrayAsync(imageUrl);
+                using var stream = new MemoryStream(bytes);
+                var image = new BitmapImage();
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.StreamSource = stream;
+                image.EndInit();
+                image.Freeze();
+                return image;
+            }
+            catch { return null; }
+        });
+
+    private void ReportPendingCount()
+    {
+        var count = PendingCount;
+        if (count != _lastReportedPendingCount)
+        {
+            _lastReportedPendingCount = count;
+            PendingCountChanged?.Invoke(this, count);
+        }
+        StatisticsChanged?.Invoke(this, new BarrageStatistics(TotalAccepted, TotalLaunched, TotalMerged,
+            TotalExpired, count, _speedBoost));
+    }
+
+    private void UpdateSpeedBoost()
+    {
+        var laneCount = Math.Max(1, _lanes.Count);
+        var newBoost = PendingCount >= laneCount * 2 ? 1.5 : PendingCount >= laneCount ? 1.25 : 1;
+        if (Math.Abs(newBoost - _speedBoost) < 0.01) return;
+        _speedBoost = newBoost;
+    }
+
+    private void CleanupDuplicateIndex()
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastDuplicateCleanup).TotalSeconds < 5) return;
+        _lastDuplicateCleanup = now;
+        var cutoffTicks = now.AddSeconds(-Math.Max(5, DuplicateWindowSeconds * 2)).Ticks;
+        foreach (var pair in _recentMessages)
+        {
+            if (pair.Value < cutoffTicks) _recentMessages.TryRemove(pair.Key, out _);
+        }
+    }
+
+    public void Dispose()
+    {
+        CompositionTarget.Rendering -= CompositionTarget_Rendering;
+        _canvas.Children.Clear();
+        _active.Clear();
+    }
+
+    private sealed class LaneState
+    {
+        public FrameworkElement? LastElement { get; set; }
+        public TranslateTransform? Transform { get; set; }
+    }
+
+    private sealed record PendingMessage(DanmakuMessage Message, DateTime ReceivedAt);
+    private sealed class ActiveBarrage(FrameworkElement element, TranslateTransform transform,
+        double x, double width, int laneIndex)
+    {
+        public FrameworkElement Element { get; } = element;
+        public TranslateTransform Transform { get; } = transform;
+        public double X { get; set; } = x;
+        public double Width { get; } = width;
+        public int LaneIndex { get; } = laneIndex;
+    }
+}
+
+public sealed record BarrageStatistics(long Received, long Displayed, long Merged, long Expired,
+    int Pending, double SpeedBoost);

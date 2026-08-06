@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "dgSpecHash": "h/NGH5Jh5XM=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\zhanghongzhi\\LiveDanmakuOverlay\\SmokeTest\\SmokeTest.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\microsoft.data.sqlite\\8.0.21\\microsoft.data.sqlite.8.0.21.nupkg.sha512",
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\microsoft.data.sqlite.core\\8.0.21\\microsoft.data.sqlite.core.8.0.21.nupkg.sha512",
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\sqlitepclraw.bundle_e_sqlite3\\2.1.6\\sqlitepclraw.bundle_e_sqlite3.2.1.6.nupkg.sha512",
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\sqlitepclraw.core\\2.1.6\\sqlitepclraw.core.2.1.6.nupkg.sha512",
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\sqlitepclraw.lib.e_sqlite3\\2.1.6\\sqlitepclraw.lib.e_sqlite3.2.1.6.nupkg.sha512",
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\sqlitepclraw.provider.e_sqlite3\\2.1.6\\sqlitepclraw.provider.e_sqlite3.2.1.6.nupkg.sha512",
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\system.memory\\4.5.3\\system.memory.4.5.3.nupkg.sha512",
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\microsoft.netcore.app.ref\\8.0.29\\microsoft.netcore.app.ref.8.0.29.nupkg.sha512",
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\microsoft.windowsdesktop.app.ref\\8.0.29\\microsoft.windowsdesktop.app.ref.8.0.29.nupkg.sha512",
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\microsoft.aspnetcore.app.ref\\8.0.29\\microsoft.aspnetcore.app.ref.8.0.29.nupkg.sha512",
+    "C:\\Users\\zhanghongzhi\\.nuget\\packages\\microsoft.netcore.app.host.win-x64\\8.0.29\\microsoft.netcore.app.host.win-x64.8.0.29.nupkg.sha512"
+  ],
+  "logs": []
+}

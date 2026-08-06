@@ -1,0 +1,334 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using Forms = System.Windows.Forms;
+
+namespace LiveDanmakuOverlay;
+
+public partial class MainWindow : Window
+{
+    private const int HotkeyToggleVisibility = 0x4101;
+    private const int HotkeyToggleLock = 0x4102;
+    private const int WmHotkey = 0x0312;
+    private const int GwlExStyle = -20;
+    private const int WsExTransparent = 0x00000020;
+    private const int WsExNoActivate = 0x08000000;
+    private const uint ModAlt = 0x0001;
+    private const uint ModControl = 0x0002;
+
+    private readonly BilibiliDanmakuClient _client = new();
+    private readonly AppSettings _settings = AppSettings.Load();
+    private readonly HistoryStore _historyStore = new();
+    private readonly MessageFilter _messageFilter;
+    private BarrageRenderer? _barrageRenderer;
+    private Forms.NotifyIcon? _trayIcon;
+    private HwndSource? _source;
+    private bool _allowClose;
+    private bool _isLocked;
+    private string _connectionStatus = "尚未连接";
+    private string _currentRoom = "";
+    private ControlCenterWindow? _controlCenter;
+
+    public MainWindow()
+    {
+        _messageFilter = new MessageFilter(_settings);
+        InitializeComponent();
+        _client.MessageReceived += Client_MessageReceived;
+        _client.StatusChanged += Client_StatusChanged;
+    }
+
+    private void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        ApplySavedSettings();
+        _barrageRenderer = new BarrageRenderer(BarrageCanvas, _settings.FontSize, _settings.ScrollSpeed, _settings.TextOpacity);
+        _barrageRenderer.FreshnessSeconds = _settings.FreshnessSeconds;
+        _barrageRenderer.DuplicateWindowSeconds = _settings.DuplicateWindowSeconds;
+        _barrageRenderer.PendingCountChanged += BarrageRenderer_PendingCountChanged;
+        _barrageRenderer.StatisticsChanged += BarrageRenderer_StatisticsChanged;
+        CreateTrayIcon();
+
+        var handle = new WindowInteropHelper(this).Handle;
+        _source = HwndSource.FromHwnd(handle);
+        _source?.AddHook(WindowProc);
+        RegisterHotKey(handle, HotkeyToggleVisibility, ModControl | ModAlt, (uint)KeyInterop.VirtualKeyFromKey(Key.D));
+        RegisterHotKey(handle, HotkeyToggleLock, ModControl | ModAlt, (uint)KeyInterop.VirtualKeyFromKey(Key.L));
+
+        SetLocked(_settings.IsLocked);
+        if (!string.IsNullOrWhiteSpace(_settings.Room))
+            _ = ConnectAsync();
+    }
+
+    private void ApplySavedSettings()
+    {
+        RoomInput.Text = _settings.Room;
+        FontSizeSlider.Value = _settings.FontSize;
+        SpeedSlider.Value = _settings.ScrollSpeed;
+        OpacitySlider.Value = _settings.BackgroundOpacity;
+        TextOpacitySlider.Value = _settings.TextOpacity;
+
+        if (_settings.Width >= MinWidth) Width = _settings.Width;
+        if (_settings.Height >= MinHeight) Height = _settings.Height;
+        if (IsOnAnyScreen(_settings.Left, _settings.Top))
+        {
+            Left = _settings.Left;
+            Top = _settings.Top;
+        }
+        else
+        {
+            Left = SystemParameters.WorkArea.Right - Width - 24;
+            Top = SystemParameters.WorkArea.Top + 24;
+        }
+        UpdateSurfaceColor();
+    }
+
+    private static bool IsOnAnyScreen(double left, double top) =>
+        left >= SystemParameters.VirtualScreenLeft - 100 &&
+        left <= SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 100 &&
+        top >= SystemParameters.VirtualScreenTop - 100 &&
+        top <= SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 100;
+
+    private async void ConnectButton_Click(object sender, RoutedEventArgs e) => await ConnectAsync();
+
+    private async void RoomInput_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) await ConnectAsync();
+    }
+
+    private async Task ConnectAsync()
+    {
+        var room = RoomInput.Text.Trim();
+        if (string.IsNullOrWhiteSpace(room))
+        {
+            StatusText.Text = "请输入直播间链接或房间号";
+            return;
+        }
+
+        ConnectButton.IsEnabled = false;
+        _settings.Room = room;
+        _currentRoom = room;
+        SaveSettings();
+        try
+        {
+            await _client.ConnectAsync(room);
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"连接失败：{ex.Message}";
+        }
+        finally
+        {
+            ConnectButton.IsEnabled = true;
+        }
+    }
+
+    private void Client_MessageReceived(object? sender, DanmakuMessage message)
+    {
+        var blocked = _messageFilter.IsBlocked(message.Text, out var reason);
+        if (!blocked || _settings.SaveBlockedMessages)
+            _historyStore.Record(_currentRoom, message, blocked, reason);
+        if (!blocked) _barrageRenderer?.Enqueue(message);
+    }
+
+    private void Client_StatusChanged(object? sender, string status) => Dispatcher.InvokeAsync(() =>
+    {
+        _connectionStatus = status;
+        UpdateStatusText(_barrageRenderer?.PendingCount ?? 0);
+    });
+
+    private void BarrageRenderer_PendingCountChanged(object? sender, int count) => UpdateStatusText(count);
+
+    private void BarrageRenderer_StatisticsChanged(object? sender, BarrageStatistics stats)
+    {
+        StatusText.Text = $"{_connectionStatus} · 收到 {stats.Received} / 显示 {stats.Displayed} / 合并 {stats.Merged} / 跳过 {stats.Expired}";
+    }
+
+    private void UpdateStatusText(int pendingCount)
+    {
+        StatusText.Text = pendingCount > 0
+            ? $"{_connectionStatus} · 等待滚动 {pendingCount} 条"
+            : _connectionStatus;
+    }
+
+    private void LockButton_Click(object sender, RoutedEventArgs e) => SetLocked(true);
+
+    private void ControlCenterButton_Click(object sender, RoutedEventArgs e) => ShowControlCenter();
+
+    private void ShowControlCenter()
+    {
+        if (_controlCenter is null || !_controlCenter.IsLoaded)
+        {
+            _controlCenter = new ControlCenterWindow(_settings, _messageFilter, _historyStore, () =>
+            {
+                _barrageRenderer!.FreshnessSeconds = _settings.FreshnessSeconds;
+                _barrageRenderer.DuplicateWindowSeconds = _settings.DuplicateWindowSeconds;
+                SaveSettings();
+            });
+        }
+        _controlCenter.Show();
+        _controlCenter.Activate();
+    }
+
+    private void SetLocked(bool locked)
+    {
+        _isLocked = locked;
+        Toolbar.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
+        ConnectionPanel.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
+        StatusPanel.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
+        ResizeThumb.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
+        ResizeMode = locked ? ResizeMode.NoResize : ResizeMode.CanResizeWithGrip;
+        SetClickThrough(locked);
+        _settings.IsLocked = locked;
+        SaveSettings();
+    }
+
+    private void SetClickThrough(bool enabled)
+    {
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero) return;
+        var style = GetWindowLong(handle, GwlExStyle);
+        style = enabled ? style | WsExTransparent | WsExNoActivate : style & ~(WsExTransparent | WsExNoActivate);
+        SetWindowLong(handle, GwlExStyle, style);
+    }
+
+    private void HideButton_Click(object sender, RoutedEventArgs e) => Hide();
+
+    private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!_isLocked && e.ButtonState == MouseButtonState.Pressed &&
+            e.OriginalSource is not System.Windows.Controls.Primitives.ButtonBase &&
+            e.OriginalSource is not System.Windows.Controls.Primitives.Thumb &&
+            e.OriginalSource is not System.Windows.Controls.TextBox)
+            DragMove();
+    }
+
+    private void FontSizeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        _settings.FontSize = e.NewValue;
+        _barrageRenderer?.SetFontSize(e.NewValue);
+    }
+
+    private void SpeedSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        _settings.ScrollSpeed = e.NewValue;
+        _barrageRenderer?.SetScrollSpeed(e.NewValue);
+    }
+
+    private void OpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        _settings.BackgroundOpacity = e.NewValue;
+        UpdateSurfaceColor();
+    }
+
+    private void TextOpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        _settings.TextOpacity = e.NewValue;
+        _barrageRenderer?.SetContentOpacity(e.NewValue);
+    }
+
+    private void UpdateSurfaceColor()
+    {
+        if (Surface is null) return;
+        var alpha = (byte)Math.Clamp(_settings.BackgroundOpacity * 255, 0, 255);
+        Surface.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(alpha, 24, 26, 32));
+    }
+
+    private void BarrageCanvas_SizeChanged(object sender, SizeChangedEventArgs e) =>
+        _barrageRenderer?.RefreshLanes();
+
+    private void ResizeThumb_DragDelta(object sender, System.Windows.Controls.Primitives.DragDeltaEventArgs e)
+    {
+        Width = Math.Max(MinWidth, ActualWidth + e.HorizontalChange);
+        Height = Math.Max(MinHeight, ActualHeight + e.VerticalChange);
+    }
+
+    private void CreateTrayIcon()
+    {
+        var menu = new Forms.ContextMenuStrip();
+        menu.Items.Add("显示/隐藏 (Ctrl+Alt+D)", null, (_, _) => ToggleVisibility());
+        menu.Items.Add("锁定/解锁 (Ctrl+Alt+L)", null, (_, _) => ToggleLock());
+        menu.Items.Add("功能与历史搜索", null, (_, _) => Dispatcher.Invoke(ShowControlCenter));
+        menu.Items.Add(new Forms.ToolStripSeparator());
+        menu.Items.Add("退出", null, async (_, _) => await ExitAsync());
+
+        _trayIcon = new Forms.NotifyIcon
+        {
+            Text = "直播弹幕悬浮窗",
+            Icon = System.Drawing.SystemIcons.Information,
+            Visible = true,
+            ContextMenuStrip = menu
+        };
+        _trayIcon.DoubleClick += (_, _) => Dispatcher.Invoke(ToggleVisibility);
+    }
+
+    private void ToggleVisibility()
+    {
+        if (IsVisible) Hide();
+        else { Show(); Topmost = true; Activate(); }
+    }
+
+    private void ToggleLock()
+    {
+        if (!IsVisible) Show();
+        SetLocked(!_isLocked);
+        if (!_isLocked) Activate();
+    }
+
+    private IntPtr WindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == WmHotkey)
+        {
+            if (wParam.ToInt32() == HotkeyToggleVisibility) ToggleVisibility();
+            if (wParam.ToInt32() == HotkeyToggleLock) ToggleLock();
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    private async Task ExitAsync()
+    {
+        _allowClose = true;
+        SaveSettings();
+        _barrageRenderer?.Dispose();
+        await _client.DisposeAsync();
+        await _historyStore.DisposeAsync();
+        _trayIcon?.Dispose();
+        System.Windows.Application.Current.Shutdown();
+    }
+
+    private void SaveSettings()
+    {
+        if (IsLoaded)
+        {
+            _settings.Left = Left;
+            _settings.Top = Top;
+            _settings.Width = ActualWidth;
+            _settings.Height = ActualHeight;
+        }
+        _settings.Save();
+    }
+
+    private void Window_Closing(object? sender, CancelEventArgs e)
+    {
+        if (!_allowClose)
+        {
+            e.Cancel = true;
+            SaveSettings();
+            Hide();
+        }
+        else
+        {
+            var handle = new WindowInteropHelper(this).Handle;
+            UnregisterHotKey(handle, HotkeyToggleVisibility);
+            UnregisterHotKey(handle, HotkeyToggleLock);
+            _source?.RemoveHook(WindowProc);
+        }
+    }
+
+    [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+    [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW")] private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int newLong);
+}
