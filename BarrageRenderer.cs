@@ -35,6 +35,7 @@ public sealed class BarrageRenderer : IDisposable
     private TimeSpan _lastRenderingTime;
     private DateTime _lastStatisticsReport = DateTime.MinValue;
     private volatile bool _enabled = true;
+    private volatile bool _disposed;
 
     public double ScrollSpeed { get; private set; }
     public int PendingCount => Volatile.Read(ref _pendingCount);
@@ -319,7 +320,7 @@ public sealed class BarrageRenderer : IDisposable
             TextAlignment = TextAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
-        var source = WindowsEmojiRenderer.Render(element, _fontSize);
+        WindowsEmojiRenderer.TryGetCached(element, _fontSize, out var source);
         var image = new System.Windows.Controls.Image
         {
             Stretch = Stretch.Uniform,
@@ -330,6 +331,26 @@ public sealed class BarrageRenderer : IDisposable
         container.Children.Add(fallback);
         container.Children.Add(image);
         block.Inlines.Add(new InlineUIContainer(container) { BaselineAlignment = BaselineAlignment.Center });
+        if (source is null) _ = ApplyEmojiAsync(element, _fontSize, fallback, image);
+    }
+
+    private async Task ApplyEmojiAsync(string element, double fontSize, TextBlock fallback,
+        System.Windows.Controls.Image image)
+    {
+        var source = await WindowsEmojiRenderer.GetOrRenderAsync(element, fontSize).ConfigureAwait(false);
+        if (source is null || _disposed) return;
+        try
+        {
+            await _canvas.Dispatcher.InvokeAsync(() =>
+            {
+                if (_disposed) return;
+                image.Source = source;
+                image.Visibility = Visibility.Visible;
+                fallback.Visibility = Visibility.Collapsed;
+            });
+        }
+        catch (TaskCanceledException) { }
+        catch (InvalidOperationException) when (_disposed) { }
     }
 
     private static bool IsEmojiElement(string element)
@@ -418,6 +439,7 @@ public sealed class BarrageRenderer : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
         CompositionTarget.Rendering -= CompositionTarget_Rendering;
         StopActiveAnimations();
         _canvas.Children.Clear();

@@ -21,7 +21,7 @@ public partial class MainWindow : Window
 
     private readonly BilibiliAccountProvider _bilibiliAccount = new();
     private readonly BilibiliDanmakuClient _client;
-    private readonly AppSettings _settings = AppSettings.Load();
+    private readonly AppSettings _settings;
     private readonly HistoryStore _historyStore = new();
     private readonly MessageFilter _messageFilter;
     private BarrageRenderer? _barrageRenderer;
@@ -37,9 +37,13 @@ public partial class MainWindow : Window
     private System.Drawing.Point _dragStartCursor;
     private double _dragStartLeft;
     private double _dragStartTop;
+    private bool _initializing = true;
 
-    public MainWindow()
+    public MainWindow() : this(AppSettings.Load()) { }
+
+    internal MainWindow(AppSettings settings)
     {
+        _settings = settings;
         _client = new BilibiliDanmakuClient(_bilibiliAccount);
         _messageFilter = new MessageFilter(_settings);
         InitializeComponent();
@@ -50,6 +54,7 @@ public partial class MainWindow : Window
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         ApplySavedSettings();
+        _initializing = false;
         _barrageRenderer = new BarrageRenderer(BarrageCanvas, _settings.FontSize, _settings.ScrollSpeed, _settings.TextOpacity);
         _barrageRenderer.SetEnabled(_settings.DanmakuEnabled);
         _barrageRenderer.FreshnessSeconds = _settings.FreshnessSeconds;
@@ -87,25 +92,25 @@ public partial class MainWindow : Window
 
         if (_settings.Width >= MinWidth) Width = _settings.Width;
         if (_settings.Height >= MinHeight) Height = _settings.Height;
-        if (IsOnAnyScreen(_settings.Left, _settings.Top))
+        var virtualBounds = new Rect(SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+        if (_settings.HasWindowPlacement &&
+            WindowPlacement.IsVisible(new System.Windows.Point(_settings.Left, _settings.Top), virtualBounds))
         {
             Left = _settings.Left;
             Top = _settings.Top;
         }
         else
         {
-            Left = SystemParameters.WorkArea.Right - Width - 24;
-            Top = SystemParameters.WorkArea.Top + 24;
+            var position = WindowPlacement.TopRight(SystemParameters.WorkArea, Width, Height, 24);
+            Left = position.X;
+            Top = position.Y;
         }
+        BackgroundOpacityValue.Text = $"{OpacitySlider.Value:P0}";
+        TextOpacityValue.Text = $"{TextOpacitySlider.Value:P0}";
         UpdateSurfaceColor();
         UpdateDanmakuToggleButton();
     }
-
-    private static bool IsOnAnyScreen(double left, double top) =>
-        left >= SystemParameters.VirtualScreenLeft - 100 &&
-        left <= SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 100 &&
-        top >= SystemParameters.VirtualScreenTop - 100 &&
-        top <= SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 100;
 
     private static int ClosestIndex(double value, params double[] choices) =>
         choices.Select((choice, index) => (Distance: Math.Abs(choice - value), Index: index))
@@ -257,8 +262,7 @@ public partial class MainWindow : Window
 
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (!_isLocked && e.ButtonState == MouseButtonState.Pressed &&
-            !IsWithinInteractiveControl(e.OriginalSource as DependencyObject) && WindowState == WindowState.Normal)
+        if (WindowDragPolicy.CanStart(e.OriginalSource as DependencyObject, _isLocked, WindowState, e.ButtonState))
         {
             _isDraggingWindow = true;
             _dragStartCursor = Forms.Cursor.Position;
@@ -289,21 +293,9 @@ public partial class MainWindow : Window
         SaveSettings();
     }
 
-    private static bool IsWithinInteractiveControl(DependencyObject? source)
-    {
-        while (source is not null)
-        {
-            if (source is System.Windows.Controls.Primitives.ButtonBase or
-                System.Windows.Controls.Primitives.Thumb or System.Windows.Controls.TextBox or
-                System.Windows.Controls.ComboBox or System.Windows.Controls.Slider)
-                return true;
-            source = VisualTreeHelper.GetParent(source);
-        }
-        return false;
-    }
-
     private void FontSizeCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
+        if (_initializing) return;
         if (FontSizeCombo.SelectedItem is not System.Windows.Controls.ComboBoxItem item ||
             !double.TryParse(item.Tag?.ToString(), out var value)) return;
         _settings.FontSize = value;
@@ -313,6 +305,7 @@ public partial class MainWindow : Window
 
     private void SpeedCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
+        if (_initializing) return;
         if (SpeedCombo.SelectedItem is not System.Windows.Controls.ComboBoxItem item ||
             !double.TryParse(item.Tag?.ToString(), out var value)) return;
         _settings.ScrollSpeed = value;
@@ -322,6 +315,7 @@ public partial class MainWindow : Window
 
     private void DisplayAreaCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
+        if (_initializing) return;
         if (DisplayAreaCombo.SelectedItem is not System.Windows.Controls.ComboBoxItem item ||
             !double.TryParse(item.Tag?.ToString(), out var value)) return;
         _settings.DisplayAreaPercent = value;
@@ -331,6 +325,7 @@ public partial class MainWindow : Window
 
     private void OpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (_initializing) return;
         _settings.BackgroundOpacity = e.NewValue;
         if (BackgroundOpacityValue is not null) BackgroundOpacityValue.Text = $"{e.NewValue:P0}";
         UpdateSurfaceColor();
@@ -339,6 +334,7 @@ public partial class MainWindow : Window
 
     private void TextOpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (_initializing) return;
         _settings.TextOpacity = e.NewValue;
         if (TextOpacityValue is not null) TextOpacityValue.Text = $"{e.NewValue:P0}";
         _barrageRenderer?.SetContentOpacity(e.NewValue);
@@ -449,6 +445,7 @@ public partial class MainWindow : Window
             _settings.Top = Top;
             _settings.Width = ActualWidth;
             _settings.Height = ActualHeight;
+            _settings.HasWindowPlacement = true;
         }
         _settings.Save();
     }

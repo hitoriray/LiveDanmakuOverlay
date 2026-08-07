@@ -1,5 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Documents;
+using System.Windows.Threading;
 using System.IO;
 using LiveDanmakuOverlay;
 using Microsoft.Data.Sqlite;
@@ -9,11 +13,89 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        TestSettingsInitialization();
+        TestWindowPlacement();
+        TestWindowDragPolicy();
+        TestAsyncEmojiRendering().GetAwaiter().GetResult();
         TestConnectionAsync(args.FirstOrDefault() ?? "6").GetAwaiter().GetResult();
         TestQrLoginAsync().GetAwaiter().GetResult();
         TestBarrageRenderer();
         TestHistoryAndFilterAsync().GetAwaiter().GetResult();
         Console.WriteLine("SMOKE_TEST_OK");
+    }
+
+    private static void TestSettingsInitialization()
+    {
+        var settings = new AppSettings
+        {
+            BackgroundOpacity = 0.2,
+            TextOpacity = 0.4,
+            FontSize = 24,
+            ScrollSpeed = 170,
+            DisplayAreaPercent = 25
+        };
+
+        _ = new MainWindow(settings);
+
+        if (settings.BackgroundOpacity != 0.2 || settings.TextOpacity != 0.4 ||
+            settings.FontSize != 24 || settings.ScrollSpeed != 170 || settings.DisplayAreaPercent != 25)
+            throw new InvalidOperationException("窗口初始化覆盖了已加载的用户设置");
+        Console.WriteLine("SETTINGS_INITIALIZATION_OK");
+    }
+
+    private static void TestWindowPlacement()
+    {
+        var position = WindowPlacement.TopRight(new Rect(0, 0, 1920, 1080), 420, 620, 24);
+        if (position != new Point(1476, 24))
+            throw new InvalidOperationException($"默认右上角位置错误：{position}");
+
+        var oversized = WindowPlacement.TopRight(new Rect(100, 50, 300, 200), 500, 400, 24);
+        if (oversized.X < 100 || oversized.Y < 50)
+            throw new InvalidOperationException("超大窗口默认位置越过工作区左上边界");
+
+        if (WindowPlacement.IsVisible(new Point(double.NaN, 20), new Rect(0, 0, 1920, 1080)))
+            throw new InvalidOperationException("无效保存坐标被误判为可恢复位置");
+        Console.WriteLine("WINDOW_PLACEMENT_OK");
+    }
+
+    private static void TestWindowDragPolicy()
+    {
+        if (!WindowDragPolicy.CanStart(new Grid(), false, WindowState.Normal, MouseButtonState.Pressed) ||
+            !WindowDragPolicy.CanStart(new TextBlock(), false, WindowState.Normal, MouseButtonState.Pressed))
+            throw new InvalidOperationException("普通背景或文字区域不能开始拖动");
+
+        DependencyObject[] controls = [new Button(), new TextBox(), new ComboBox(), new Slider(), new Thumb()];
+        if (controls.Any(control => WindowDragPolicy.CanStart(control, false, WindowState.Normal, MouseButtonState.Pressed)))
+            throw new InvalidOperationException("交互控件被误判为可拖动区域");
+
+        var child = new Border();
+        var parentButton = new Button { Content = child };
+        if (WindowDragPolicy.CanStart(child, false, WindowState.Normal, MouseButtonState.Pressed))
+            throw new InvalidOperationException("交互控件的子元素被误判为可拖动区域");
+        GC.KeepAlive(parentButton);
+
+        if (WindowDragPolicy.CanStart(new Grid(), true, WindowState.Normal, MouseButtonState.Pressed) ||
+            WindowDragPolicy.CanStart(new Grid(), false, WindowState.Maximized, MouseButtonState.Pressed) ||
+            WindowDragPolicy.CanStart(new Grid(), false, WindowState.Normal, MouseButtonState.Released))
+            throw new InvalidOperationException("锁定、最大化或未按下左键时仍允许拖动");
+        Console.WriteLine("WINDOW_DRAG_POLICY_OK");
+    }
+
+    private static async Task TestAsyncEmojiRendering()
+    {
+        const string emoji = "🛸";
+        WindowsEmojiRenderer.Invalidate(emoji, 23);
+        var first = WindowsEmojiRenderer.GetOrRenderAsync(emoji, 23);
+        var second = WindowsEmojiRenderer.GetOrRenderAsync(emoji, 23);
+        if (!ReferenceEquals(first, second))
+            throw new InvalidOperationException("同一 Emoji 创建了重复后台渲染任务");
+
+        var source = await first;
+        if (source is null || !source.IsFrozen)
+            throw new InvalidOperationException("异步 Emoji 渲染没有返回冻结图像");
+        if (!WindowsEmojiRenderer.TryGetCached(emoji, 23, out var cached) || !ReferenceEquals(source, cached))
+            throw new InvalidOperationException("异步 Emoji 渲染结果未进入缓存");
+        Console.WriteLine("ASYNC_EMOJI_RENDERING_OK");
     }
 
     private static async Task TestQrLoginAsync()
@@ -84,10 +166,22 @@ internal static class Program
         emojiCanvas.Measure(new Size(600, 80));
         emojiCanvas.Arrange(new Rect(0, 0, 600, 80));
         using var emojiRenderer = new BarrageRenderer(emojiCanvas, 18, 100, 1);
-        emojiRenderer.Enqueue(new DanmakuMessage("用户", "中文😀👨‍👩‍👧‍👦"));
+        emojiRenderer.Enqueue(new DanmakuMessage("用户", "中文🧩👨‍👩‍👧‍👦"));
         var emojiBlock = emojiCanvas.Children.OfType<TextBlock>().Single();
-        if (emojiBlock.Inlines.OfType<System.Windows.Documents.InlineUIContainer>().Count() != 2)
+        var emojiContainers = emojiBlock.Inlines.OfType<InlineUIContainer>()
+            .Select(inline => (Grid)inline.Child).ToArray();
+        if (emojiContainers.Length != 2)
             throw new InvalidOperationException("标准 Emoji 未转换为 Windows 彩色图片");
+        if (emojiContainers.Any(container => container.Children.OfType<System.Windows.Controls.Image>().Single().Source is not null ||
+                                             container.Children.OfType<TextBlock>().Single().Visibility != Visibility.Visible))
+            throw new InvalidOperationException("未缓存 Emoji 没有先显示字体回退");
+
+        WindowsEmojiRenderer.GetOrRenderAsync("🧩", 18).GetAwaiter().GetResult();
+        WindowsEmojiRenderer.GetOrRenderAsync("👨‍👩‍👧‍👦", 18).GetAwaiter().GetResult();
+        PumpDispatcherUntil(() => emojiContainers.All(container =>
+            container.Children.OfType<System.Windows.Controls.Image>().Single().Visibility == Visibility.Visible));
+        if (emojiContainers.Any(container => container.Children.OfType<TextBlock>().Single().Visibility != Visibility.Collapsed))
+            throw new InvalidOperationException("彩色 Emoji 完成后没有隐藏字体回退");
         emojiRenderer.SetEnabled(false);
         emojiRenderer.Enqueue(new DanmakuMessage("用户", "关闭期间不应显示"));
         if (emojiCanvas.Children.Count != 0 || emojiRenderer.TotalExpired == 0)
@@ -97,6 +191,19 @@ internal static class Program
         if (emojiCanvas.Children.Count == 0)
             throw new InvalidOperationException("重新开启弹幕后未恢复显示");
         Console.WriteLine($"BARRAGE_RENDERER_OK · accepted={renderer.TotalAccepted} · displayed={renderer.TotalLaunched} · expired={renderer.TotalExpired} · pending={renderer.PendingCount}");
+    }
+
+    private static void PumpDispatcherUntil(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            var frame = new DispatcherFrame();
+            Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background,
+                new Action(() => frame.Continue = false));
+            Dispatcher.PushFrame(frame);
+        }
+        if (!condition()) throw new InvalidOperationException("异步 Emoji 未能更新到界面");
     }
 
     private static async Task TestHistoryAndFilterAsync()

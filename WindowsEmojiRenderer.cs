@@ -8,18 +8,79 @@ namespace LiveDanmakuOverlay;
 
 public static class WindowsEmojiRenderer
 {
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ImageSource> Cache = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<ImageSource?>>> Cache = new();
+    private static readonly SemaphoreSlim RenderSlots = new(2, 2);
+    private static readonly SemaphoreSlim RenderQueueSlots = new(64, 64);
     private static readonly SKTypeface EmojiTypeface =
         SKTypeface.FromFamilyName("Segoe UI Emoji") ?? SKTypeface.Default;
 
     public static ImageSource? Render(string emoji, double fontSize)
     {
-        var key = $"{fontSize:F1}\0{emoji}";
-        if (Cache.TryGetValue(key, out var cached)) return cached;
-        var rendered = RenderCore(emoji, fontSize);
-        if (rendered is not null) Cache.TryAdd(key, rendered);
-        return rendered;
+        return GetOrRenderAsync(emoji, fontSize).GetAwaiter().GetResult();
     }
+
+    public static Task<ImageSource?> GetOrRenderAsync(string emoji, double fontSize)
+    {
+        var key = CacheKey(emoji, fontSize);
+        Lazy<Task<ImageSource?>>? candidate = null;
+        candidate = new Lazy<Task<ImageSource?>>(
+            () => RenderAndCacheAsync(key, emoji, fontSize, candidate!), LazyThreadSafetyMode.ExecutionAndPublication);
+        return Cache.GetOrAdd(key, candidate).Value;
+    }
+
+    internal static bool TryGetCached(string emoji, double fontSize, out ImageSource? source)
+    {
+        if (Cache.TryGetValue(CacheKey(emoji, fontSize), out var entry) && entry.IsValueCreated &&
+            entry.Value.IsCompletedSuccessfully && entry.Value.Result is { } cached)
+        {
+            source = cached;
+            return true;
+        }
+        source = null;
+        return false;
+    }
+
+    internal static void Invalidate(string emoji, double fontSize) =>
+        Cache.TryRemove(CacheKey(emoji, fontSize), out _);
+
+    private static string CacheKey(string emoji, double fontSize) => $"{fontSize:F1}\0{emoji}";
+
+    private static async Task<ImageSource?> RenderAndCacheAsync(string key, string emoji, double fontSize,
+        Lazy<Task<ImageSource?>> owner)
+    {
+        if (!RenderQueueSlots.Wait(0))
+        {
+            RemoveIfOwner(key, owner);
+            return null;
+        }
+        try
+        {
+            await RenderSlots.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var rendered = await Task.Run(() => RenderCore(emoji, fontSize)).ConfigureAwait(false);
+                if (rendered is null) RemoveIfOwner(key, owner);
+                return rendered;
+            }
+            finally
+            {
+                RenderSlots.Release();
+            }
+        }
+        catch
+        {
+            RemoveIfOwner(key, owner);
+            return null;
+        }
+        finally
+        {
+            RenderQueueSlots.Release();
+        }
+    }
+
+    private static void RemoveIfOwner(string key, Lazy<Task<ImageSource?>> owner) =>
+        ((ICollection<KeyValuePair<string, Lazy<Task<ImageSource?>>>>)Cache)
+        .Remove(new KeyValuePair<string, Lazy<Task<ImageSource?>>>(key, owner));
 
     private static ImageSource? RenderCore(string emoji, double fontSize)
     {

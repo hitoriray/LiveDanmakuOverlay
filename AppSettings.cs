@@ -14,6 +14,7 @@ public sealed class AppSettings
     public double Top { get; set; } = double.NaN;
     public double Width { get; set; } = 420;
     public double Height { get; set; } = 620;
+    public bool HasWindowPlacement { get; set; }
     public double FontSize { get; set; } = 18;
     public double BackgroundOpacity { get; set; } = 0.45;
     public double ScrollSpeed { get; set; } = 100;
