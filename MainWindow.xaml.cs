@@ -55,7 +55,8 @@ public partial class MainWindow : Window
     {
         ApplySavedSettings();
         _initializing = false;
-        _barrageRenderer = new BarrageRenderer(BarrageCanvas, _settings.FontSize, _settings.ScrollSpeed, _settings.TextOpacity);
+        _barrageRenderer = new BarrageRenderer(BarrageCanvas, _settings.FontSize,
+            BarrageRenderer.PercentToPxPerSecond(_settings.ScrollSpeedPercent), _settings.TextOpacity);
         _barrageRenderer.SetEnabled(_settings.DanmakuEnabled);
         _barrageRenderer.FreshnessSeconds = _settings.FreshnessSeconds;
         _barrageRenderer.DuplicateWindowSeconds = _settings.DuplicateWindowSeconds;
@@ -85,8 +86,8 @@ public partial class MainWindow : Window
     {
         RoomInput.Text = _settings.Room;
         FontSizeCombo.SelectedIndex = ClosestIndex(_settings.FontSize, 14, 18, 24);
-        SpeedCombo.SelectedIndex = ClosestIndex(_settings.ScrollSpeed, 70, 110, 170);
-        DisplayAreaCombo.SelectedIndex = ClosestIndex(_settings.DisplayAreaPercent, 10, 25, 50, 75, 100);
+        SpeedCombo.SelectedIndex = ClosestIndex(_settings.ScrollSpeedPercent, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100);
+        DisplayAreaCombo.SelectedIndex = ClosestIndex(_settings.DisplayAreaPercent, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100);
         OpacitySlider.Value = Math.Clamp(Math.Round(_settings.BackgroundOpacity * 10, MidpointRounding.AwayFromZero) / 10, 0, 1);
         TextOpacitySlider.Value = Math.Clamp(Math.Round(_settings.TextOpacity * 10, MidpointRounding.AwayFromZero) / 10, 0.1, 1);
 
@@ -308,8 +309,8 @@ public partial class MainWindow : Window
         if (_initializing) return;
         if (SpeedCombo.SelectedItem is not System.Windows.Controls.ComboBoxItem item ||
             !double.TryParse(item.Tag?.ToString(), out var value)) return;
-        _settings.ScrollSpeed = value;
-        _barrageRenderer?.SetScrollSpeed(value);
+        _settings.ScrollSpeedPercent = value;
+        _barrageRenderer?.SetScrollSpeed(BarrageRenderer.PercentToPxPerSecond(value));
         SaveSettings();
     }
 

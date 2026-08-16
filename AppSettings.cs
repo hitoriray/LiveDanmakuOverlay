@@ -17,7 +17,7 @@ public sealed class AppSettings
     public bool HasWindowPlacement { get; set; }
     public double FontSize { get; set; } = 18;
     public double BackgroundOpacity { get; set; } = 0.45;
-    public double ScrollSpeed { get; set; } = 100;
+    public double ScrollSpeedPercent { get; set; } = 50;
     public double TextOpacity { get; set; } = 1;
     public double DisplayAreaPercent { get; set; } = 100;
     public bool DanmakuEnabled { get; set; } = true;

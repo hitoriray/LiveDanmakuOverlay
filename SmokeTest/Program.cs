@@ -31,14 +31,14 @@ internal static class Program
             BackgroundOpacity = 0.2,
             TextOpacity = 0.4,
             FontSize = 24,
-            ScrollSpeed = 170,
+            ScrollSpeedPercent = 50,
             DisplayAreaPercent = 25
         };
 
         _ = new MainWindow(settings);
 
         if (settings.BackgroundOpacity != 0.2 || settings.TextOpacity != 0.4 ||
-            settings.FontSize != 24 || settings.ScrollSpeed != 170 || settings.DisplayAreaPercent != 25)
+            settings.FontSize != 24 || settings.ScrollSpeedPercent != 50 || settings.DisplayAreaPercent != 25)
             throw new InvalidOperationException("窗口初始化覆盖了已加载的用户设置");
         Console.WriteLine("SETTINGS_INITIALIZATION_OK");
     }

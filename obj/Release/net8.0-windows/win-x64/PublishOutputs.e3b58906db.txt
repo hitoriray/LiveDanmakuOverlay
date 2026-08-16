@@ -1,0 +1,5 @@
+C:\LiveDanmaku\LiveDanmakuOverlay\publish\LiveDanmakuOverlay.pdb
+C:\LiveDanmaku\LiveDanmakuOverlay\publish\libHarfBuzzSharp.dll
+C:\LiveDanmaku\LiveDanmakuOverlay\publish\libSkiaSharp.dll
+C:\LiveDanmaku\LiveDanmakuOverlay\publish\e_sqlite3.dll
+C:\LiveDanmaku\LiveDanmakuOverlay\publish\LiveDanmakuOverlay.exe
