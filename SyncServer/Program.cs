@@ -174,7 +174,8 @@ internal sealed class SyncStore
         if (!await reader.ReadAsync()) return null;
         using var document = JsonDocument.Parse(reader.GetString(2));
         return new RemoteSyncDocument(reader.GetInt64(0),
-            DateTimeOffset.Parse(reader.GetString(1)), document.RootElement.Clone());
+            DateTimeOffset.Parse(reader.GetString(1), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind), document.RootElement.Clone());
     }
 
     private static JsonElement EmptyPayload()

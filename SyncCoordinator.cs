@@ -89,7 +89,7 @@ public sealed class SyncCoordinator : IAsyncDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return Publish(new SyncStatus("同步已取消。", true));
+            return Publish(new SyncStatus("同步超时或已取消，请检查网络和服务器地址。", true));
         }
         catch (Exception ex)
         {
