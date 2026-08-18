@@ -5,16 +5,20 @@
 > GitHub：`https://github.com/hitoriray/LiveDanmakuOverlay.git`  
 > 当前分支：`master`
 
-## 1. 当前目标
+## 1. 当前状态（2026-08-18 部署已完成）
 
-项目名为“弹幕姬”，是一个 .NET 8 / WPF 的 Windows 直播弹幕悬浮窗。当前客户端主体功能已经完成，正在增加“公司电脑与家里电脑之间的远程同步”。
+项目名为"弹幕姬"，是一个 .NET 8 / WPF 的 Windows 直播弹幕悬浮窗。客户端主体功能与远程同步功能均已完成，同步服务已于 2026-08-18 成功部署到用户服务器并通过公网验证：
 
-当前最优先目标不是继续设计同步功能，而是：
+1. ✅ 同步服务已部署：`systemctl status danmaku-sync` active，监听 127.0.0.1:5091。
+2. ✅ `https://sync.rache1gardner.com/health` 公网返回 `{"status":"ok"}`。
+3. ✅ 公司电脑客户端已配置同步（账号 `danmaku`，密码在服务器 `/etc/danmaku-sync.env` 与本机 DPAPI `accounts\sync.dat`，不在 Git）。
+4. ✅ SSH 已恢复安全配置（密码登录关闭），`ssh danmaku-server` 别名可用专用密钥直连。
 
-1. 把已经写好的轻量同步服务部署到用户服务器。
-2. 通过 `https://sync.rache1gardner.com` 验证服务可用。
-3. 在弹幕姬客户端填写同步地址、账号和密码，完成两台电脑的实际同步验证。
-4. 部署完成后恢复安全的 SSH 配置；是否保留本次专用部署公钥由用户决定。
+剩余待办（需用户参与）：
+
+1. 家里电脑安装客户端并填写同步配置，完成真实双机验证（服务器上已留有测试屏蔽词"远程同步测试词"和置顶直播间"测试直播间/84074"，家里电脑同步后应能看到；验证完可删除）。
+2. ✅ 正式 Origin 证书已安装：`/etc/nginx/ssl/cloudflare/rache1gardner.com-origin.{pem,key}`（SAN `*.rache1gardner.com`，有效期至 2041-08）。Cloudflare SSL 模式现在可以放心设为 Full (strict)。
+3. 用户决定是否保留 `LiveDanmakuOverlay-deployment` 部署公钥。
 
 ## 2. 当前 Git 与发布状态
 
@@ -126,73 +130,16 @@ IP: 80.251.217.69
 - Cloudflare Origin Rule 已把该子域名的目标端口改写为 `2334`。
 - Cloudflare SSL/TLS 应使用 `Full (strict)`。
 
-## 7. SSH 当前状态（必须先核实）
+## 7. SSH 状态（2026-08-18 已核实完成）
 
-用户为了排查公钥登录，已经临时允许 root 密码 SSH，并确认密码方式可以连接服务器。很可能创建过：
+- `ssh danmaku-server` 已在 `~/.ssh/config` 配置（root@80.251.217.69，专用密钥 `live_danmaku_sync_ed25519`），密钥登录已验证成功。
+- 服务器 `sshd -T`：`passwordauthentication no`、`permitrootlogin without-password`，临时放开配置 `00-temp-open.conf` 已不存在。SSH 收尾无需再做。
+- 不要把私钥内容写入 Git、聊天或服务器。
 
-```text
-/etc/ssh/sshd_config.d/00-temp-open.conf
-```
+## 8. 部署步骤记录（2026-08-18 已执行完毕，以下保留作参考）
 
-推测内容为：
-
-```text
-PasswordAuthentication yes
-PermitRootLogin yes
-```
-
-这只是会话上下文中的推测，服务器实时状态尚未由本机再次核验。接手后先执行：
-
-```bash
-sshd -T | grep -E 'passwordauthentication|permitrootlogin'
-ls -l /etc/ssh/sshd_config.d/
-grep -RniE 'PasswordAuthentication|PermitRootLogin' /etc/ssh/sshd_config /etc/ssh/sshd_config.d 2>/dev/null
-```
-
-本机已经生成专用部署密钥：
-
-```text
-私钥: C:\Users\zhanghongzhi\.ssh\live_danmaku_sync_ed25519
-公钥: C:\Users\zhanghongzhi\.ssh\live_danmaku_sync_ed25519.pub
-指纹: SHA256:MBN3lCFcHynnQ4G70Vj/+rUl7S5Pdus4BWsX0w82L2U
-注释: LiveDanmakuOverlay-deployment
-```
-
-不要把私钥内容写入 Git、聊天或服务器。此前手工录入公钥曾失败；用户最后问的是如何通过已连接的密码 SSH 会话把本机公钥正确放入服务器，目前尚未确认专用密钥登录是否成功。
-
-在本机 PowerShell 中可准确追加公钥：
-
-```powershell
-Get-Content "$env:USERPROFILE\.ssh\live_danmaku_sync_ed25519.pub" |
-ssh root@80.251.217.69 "umask 077; mkdir -p /root/.ssh; cat >> /root/.ssh/authorized_keys"
-```
-
-然后测试专用密钥：
-
-```powershell
-ssh -i "$env:USERPROFILE\.ssh\live_danmaku_sync_ed25519" -o IdentitiesOnly=yes root@80.251.217.69
-```
-
-如失败，在已保持的密码 SSH 会话里检查：
-
-```bash
-chmod 700 /root/.ssh
-chmod 600 /root/.ssh/authorized_keys
-chown -R root:root /root/.ssh
-tail -n 3 /root/.ssh/authorized_keys
-journalctl -u ssh -n 100 --no-pager
-```
-
-确认新开的终端可以使用密钥登录后，再删除临时放开配置并重启 SSH：
-
-```bash
-rm -f /etc/ssh/sshd_config.d/00-temp-open.conf
-sshd -t && systemctl restart ssh
-```
-
-不要在密钥登录尚未从“另一个新终端”验证成功前关闭当前可用的 SSH 会话。
-
-## 8. 剩余工作（按顺序执行）
+> 状态：A–D 已完成；E 中公司电脑已验证（首次同步 revision 1，模拟远端推送后拉取成功，当前 revision 3），家里电脑验证待用户执行；F 中 SSH 已硬化，部署公钥去留待用户决定。
+> 补充记录：UFW 已放行 2334/tcp；`/var/log` 日志已清理（journal 限 200M）；Nginx 站点暂用 docs 证书占位。
 
 ### A. 建立并验证密钥登录
 
@@ -347,11 +294,11 @@ dotnet publish .\SyncServer\LiveDanmakuOverlay.SyncServer.csproj `
 
 ## 10. 不要误判的事项
 
-- 目前“源码已实现并已推送”，剩余重点是服务器部署和真实双机验证。
-- “密码 SSH 已经能登录”不等于“专用公钥登录已经成功”；后者仍待确认。
-- 服务器当前 systemd、Nginx 和公网健康检查都尚未确认成功，不要声称已经部署完成。
-- 不要占用或改坏 Xray 的 443/8443。
+- 部署已于 2026-08-18 完成并通过公网验证；剩余重点是家里电脑的真实双机验证。
+- 专用公钥登录已成功（`ssh danmaku-server`）。
+- 服务器 systemd、Nginx、公网健康检查均已确认成功。
+- 不要占用或改坏 Xray 的 443/8443。UFW 已放行 2334/tcp。
 - 不要上传 B站 Cookie、同步密码、本地弹幕历史或私钥。
-- 1 核 / 1 GB 服务器足够运行当前轻量服务；systemd 模板已经设置 `MemoryMax=160M`。
-- 服务端数据文件预计位于 `/var/lib/danmaku-sync/sync.db`，不是无限保存：同步版本只保留最近 20 个。
+- 1 核 / 1 GB 服务器足够运行当前轻量服务；systemd 模板已经设置 `MemoryMax=160M`（实测约 50M）。
+- 服务端数据文件位于 `/var/lib/danmaku-sync/sync.db`，不是无限保存：同步版本只保留最近 20 个。
 
