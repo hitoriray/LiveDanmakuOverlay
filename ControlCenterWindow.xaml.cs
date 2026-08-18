@@ -14,6 +14,7 @@ public partial class ControlCenterWindow : Window
     private readonly HistoryStore _history;
     private readonly Action _settingsChanged;
     private readonly IPlatformAccountProvider _account;
+    private readonly SyncCoordinator _syncCoordinator;
     private readonly Action _accountChanged;
     private CancellationTokenSource? _loginCts;
     private bool _initializing = true;
@@ -23,13 +24,14 @@ public partial class ControlCenterWindow : Window
     private double _dragStartTop;
 
     public ControlCenterWindow(AppSettings settings, MessageFilter filter, HistoryStore history,
-        IPlatformAccountProvider account, Action settingsChanged, Action accountChanged)
+        IPlatformAccountProvider account, SyncCoordinator syncCoordinator, Action settingsChanged, Action accountChanged)
     {
         _settings = settings;
         _filter = filter;
         _history = history;
         _settingsChanged = settingsChanged;
         _account = account;
+        _syncCoordinator = syncCoordinator;
         _accountChanged = accountChanged;
         InitializeComponent();
         RefreshKeywords();
@@ -38,10 +40,109 @@ public partial class ControlCenterWindow : Window
         FreshnessSlider.Value = settings.FreshnessSeconds;
         DuplicateSlider.Value = settings.DuplicateWindowSeconds;
         RetentionCombo.SelectedIndex = settings.HistoryRetentionDays switch { 7 => 0, 90 => 2, 0 => 3, _ => 1 };
+        SyncUrlInput.Text = settings.RemoteSyncUrl;
+        SyncUserInput.Text = settings.RemoteSyncUserName;
+        SyncPasswordInput.Password = SyncCredentialStore.Load();
+        SyncEnabledCheck.IsChecked = settings.RemoteSyncEnabled;
+        SyncDisplayCheck.IsChecked = settings.SyncDisplaySettings;
+        SyncStrategyCheck.IsChecked = settings.SyncStrategySettings;
+        SyncFiltersCheck.IsChecked = settings.SyncFilters;
+        SyncRoomsCheck.IsChecked = settings.SyncRooms;
+        RefreshSavedRooms();
+        _syncCoordinator.StatusChanged += SyncCoordinator_StatusChanged;
         UpdateStrategyLabels();
         _initializing = false;
         Loaded += async (_, _) => { await RefreshHistoryStatusAsync(); await RefreshAccountStatusAsync(); };
-        Closed += (_, _) => { _loginCts?.Cancel(); _loginCts?.Dispose(); };
+        Closed += (_, _) =>
+        {
+            _loginCts?.Cancel();
+            _loginCts?.Dispose();
+            _syncCoordinator.StatusChanged -= SyncCoordinator_StatusChanged;
+        };
+    }
+
+    private void SaveSyncConfig()
+    {
+        var endpointChanged = !string.Equals(_settings.RemoteSyncUrl, SyncUrlInput.Text.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                              !string.Equals(_settings.RemoteSyncUserName, SyncUserInput.Text.Trim(), StringComparison.Ordinal);
+        _settings.RemoteSyncUrl = SyncUrlInput.Text.Trim();
+        _settings.RemoteSyncUserName = SyncUserInput.Text.Trim();
+        _settings.RemoteSyncEnabled = SyncEnabledCheck.IsChecked == true;
+        _settings.SyncDisplaySettings = SyncDisplayCheck.IsChecked == true;
+        _settings.SyncStrategySettings = SyncStrategyCheck.IsChecked == true;
+        _settings.SyncFilters = SyncFiltersCheck.IsChecked == true;
+        _settings.SyncRooms = SyncRoomsCheck.IsChecked == true;
+        SyncCredentialStore.Save(SyncPasswordInput.Password);
+        if (endpointChanged) _syncCoordinator.ResetLocalBase();
+        _settingsChanged();
+    }
+
+    private void SaveSyncConfig_Click(object sender, RoutedEventArgs e)
+    {
+        SaveSyncConfig();
+        SyncStatusText.Text = "同步配置已保存。密码使用 Windows 当前用户加密，仅保存在本机。";
+    }
+
+    private async void SaveAndSync_Click(object sender, RoutedEventArgs e)
+    {
+        SaveSyncConfig();
+        await _syncCoordinator.SyncNowAsync();
+    }
+
+    private async void KeepLocal_Click(object sender, RoutedEventArgs e) =>
+        await _syncCoordinator.ResolveConflictAsync(useLocal: true);
+
+    private async void UseRemote_Click(object sender, RoutedEventArgs e) =>
+        await _syncCoordinator.ResolveConflictAsync(useLocal: false);
+
+    private void SyncCoordinator_StatusChanged(object? sender, SyncStatus status) => Dispatcher.InvokeAsync(() =>
+    {
+        SyncStatusText.Text = status.Conflicts is { Count: > 0 }
+            ? $"{status.Message} 冲突项：{string.Join("、", status.Conflicts)}"
+            : status.Message;
+        SyncStatusText.Foreground = new SolidColorBrush(status.IsError ?
+            System.Windows.Media.Color.FromRgb(201, 52, 69) :
+            System.Windows.Media.Color.FromRgb(116, 123, 140));
+        KeepLocalButton.Visibility = status.HasConflict ? Visibility.Visible : Visibility.Collapsed;
+        UseRemoteButton.Visibility = status.HasConflict ? Visibility.Visible : Visibility.Collapsed;
+        RefreshKeywords();
+        RefreshBlockedUsers();
+        RefreshSavedRooms();
+    });
+
+    private void RefreshSavedRooms()
+    {
+        if (SavedRoomList is null) return;
+        SavedRoomList.ItemsSource = _settings.SavedRooms.OrderByDescending(room => room.IsPinned).ToArray();
+    }
+
+    private void RenameRoom_Click(object sender, RoutedEventArgs e)
+    {
+        if (SavedRoomList.SelectedItem is not SavedRoom room || string.IsNullOrWhiteSpace(RoomNameInput.Text)) return;
+        ReplaceRoom(room, room with { Name = RoomNameInput.Text.Trim() });
+        RoomNameInput.Clear();
+    }
+
+    private void TogglePinRoom_Click(object sender, RoutedEventArgs e)
+    {
+        if (SavedRoomList.SelectedItem is SavedRoom room) ReplaceRoom(room, room with { IsPinned = !room.IsPinned });
+    }
+
+    private void DeleteRoom_Click(object sender, RoutedEventArgs e)
+    {
+        if (SavedRoomList.SelectedItem is not SavedRoom room) return;
+        _settings.SavedRooms.Remove(room);
+        RefreshSavedRooms();
+        _settingsChanged();
+    }
+
+    private void ReplaceRoom(SavedRoom oldRoom, SavedRoom newRoom)
+    {
+        var index = _settings.SavedRooms.IndexOf(oldRoom);
+        if (index < 0) return;
+        _settings.SavedRooms[index] = newRoom;
+        RefreshSavedRooms();
+        _settingsChanged();
     }
 
     private void AddKeyword_Click(object sender, RoutedEventArgs e) => AddKeyword();

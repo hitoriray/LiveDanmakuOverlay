@@ -12,8 +12,10 @@
 
   <ItemGroup>
     <Compile Remove="SmokeTest\**\*.cs" />
+    <Compile Remove="SyncServer\**\*.cs" />
     <EmbeddedResource Remove="SmokeTest\**\*" />
     <None Remove="SmokeTest\**\*" />
+    <None Remove="SyncServer\**\*" />
   </ItemGroup>
 
   <ItemGroup>

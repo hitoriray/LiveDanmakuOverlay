@@ -62,8 +62,10 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <TextBox x:Name="RoomInput" Height="34" Padding="9,5" VerticalContentAlignment="Center"
-                         ToolTip="输入 B站直播间链接或房间号" KeyDown="RoomInput_KeyDown"/>
+                <ComboBox x:Name="RoomInput" Height="34" Padding="9,5" VerticalContentAlignment="Center"
+                          IsEditable="True" IsTextSearchEnabled="True" DisplayMemberPath="DisplayName"
+                          ToolTip="输入房间号或直播间链接，也可从已保存列表选择" KeyDown="RoomInput_KeyDown"
+                          SelectionChanged="RoomInput_SelectionChanged"/>
                 <Button x:Name="ConnectButton" Grid.Column="1" Content="连接" Margin="8,0,0,0"
                         Click="ConnectButton_Click" Style="{StaticResource AccentButton}"/>
             </Grid>

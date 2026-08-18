@@ -25,6 +25,14 @@ public sealed class AppSettings
     public double DuplicateWindowSeconds { get; set; } = 2;
     public List<string> BlockedKeywords { get; set; } = [];
     public List<string> BlockedUsers { get; set; } = [];
+    public List<SavedRoom> SavedRooms { get; set; } = [];
+    public string RemoteSyncUrl { get; set; } = "";
+    public string RemoteSyncUserName { get; set; } = "";
+    public bool RemoteSyncEnabled { get; set; }
+    public bool SyncDisplaySettings { get; set; } = true;
+    public bool SyncStrategySettings { get; set; } = true;
+    public bool SyncFilters { get; set; } = true;
+    public bool SyncRooms { get; set; } = true;
     public bool SaveBlockedMessages { get; set; } = true;
     public int HistoryRetentionDays { get; set; } = 30;
     public bool IsLocked { get; set; }
@@ -49,4 +57,11 @@ public sealed class AppSettings
         }
         catch { /* Settings failure should never stop the overlay. */ }
     }
+}
+
+public sealed record SavedRoom(string Name, string Room, bool IsPinned = false)
+{
+    public string DisplayName => string.Equals(Name, Room, StringComparison.OrdinalIgnoreCase)
+        ? Room
+        : $"{Name} · {Room}";
 }

@@ -21,6 +21,7 @@ internal static class Program
         TestQrLoginAsync().GetAwaiter().GetResult();
         TestBarrageRenderer();
         TestHistoryAndFilterAsync().GetAwaiter().GetResult();
+        TestSyncMerge();
         Console.WriteLine("SMOKE_TEST_OK");
     }
 
@@ -258,5 +259,51 @@ internal static class Program
         }
         Directory.Delete(testDirectory, recursive: true);
         Console.WriteLine("HISTORY_FILTER_OK");
+    }
+
+    private static void TestSyncMerge()
+    {
+        var baseSettings = new AppSettings
+        {
+            FontSize = 18,
+            BackgroundOpacity = 0.5,
+            BlockedKeywords = ["广告", "刷屏"],
+            BlockedUsers = ["用户甲"],
+            SavedRooms = [new SavedRoom("房间一", "1")]
+        };
+        var @base = SyncPayloadConverter.FromSettings(baseSettings);
+
+        var localSettings = new AppSettings
+        {
+            FontSize = 24,
+            BackgroundOpacity = 0.5,
+            BlockedKeywords = ["广告", "本地新增"],
+            BlockedUsers = ["用户甲"],
+            SavedRooms = [new SavedRoom("房间一", "1"), new SavedRoom("本地房间", "2")]
+        };
+        var remoteSettings = new AppSettings
+        {
+            FontSize = 18,
+            BackgroundOpacity = 0.8,
+            BlockedKeywords = ["广告", "刷屏", "远程新增"],
+            BlockedUsers = [],
+            SavedRooms = [new SavedRoom("房间一", "1"), new SavedRoom("远程房间", "3")]
+        };
+        var merged = SyncPayloadMerger.Merge(@base,
+            SyncPayloadConverter.FromSettings(localSettings), SyncPayloadConverter.FromSettings(remoteSettings));
+        if (merged.HasConflicts || merged.Payload is null || merged.Payload.Display.FontSize != 24 ||
+            Math.Abs(merged.Payload.Display.BackgroundOpacity - 0.8) > 0.001 ||
+            merged.Payload.Filters.BlockedKeywords.Contains("刷屏") ||
+            !merged.Payload.Filters.BlockedKeywords.Contains("本地新增") ||
+            !merged.Payload.Filters.BlockedKeywords.Contains("远程新增") ||
+            merged.Payload.Filters.BlockedUsers.Count != 0 || merged.Payload.Rooms.SavedRooms.Count != 3)
+            throw new InvalidOperationException("同步三方合并未正确处理独立修改、新增或删除");
+
+        remoteSettings.FontSize = 14;
+        var conflict = SyncPayloadMerger.Merge(@base,
+            SyncPayloadConverter.FromSettings(localSettings), SyncPayloadConverter.FromSettings(remoteSettings));
+        if (!conflict.HasConflicts || !conflict.Conflicts.Contains("字号"))
+            throw new InvalidOperationException("同步没有检测到同一设置项的真实冲突");
+        Console.WriteLine("SYNC_MERGE_OK");
     }
 }

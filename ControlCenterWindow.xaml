@@ -6,6 +6,7 @@
         StateChanged="ControlWindow_StateChanged"
         FontFamily="Microsoft YaHei UI" FontSize="13" Foreground="#FF202534">
     <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
         <SolidColorBrush x:Key="AccentBrush" Color="#FF6C5CE7"/>
         <SolidColorBrush x:Key="AccentHoverBrush" Color="#FF5B4CD2"/>
         <SolidColorBrush x:Key="TextMutedBrush" Color="#FF747B8C"/>
@@ -114,6 +115,62 @@
                         </Grid>
                     </Border>
                 </StackPanel>
+            </TabItem>
+
+            <TabItem Header="同步与直播间">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock Text="同步与直播间" Style="{StaticResource PageTitle}"/>
+                        <TextBlock Text="跨设备同步屏蔽规则、常用直播间和普通设置；账号凭据、弹幕历史及窗口位置始终只保存在本机。" Style="{StaticResource PageDescription}" TextWrapping="Wrap"/>
+                        <Border Style="{StaticResource Card}">
+                            <Grid>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <TextBlock Text="远程同步" FontSize="16" FontWeight="SemiBold"/>
+                                <Grid Grid.Row="1" Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="90"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition Height="42"/><RowDefinition Height="42"/><RowDefinition Height="42"/></Grid.RowDefinitions>
+                                    <TextBlock Text="服务器地址" VerticalAlignment="Center" Foreground="{StaticResource TextMutedBrush}"/>
+                                    <TextBox x:Name="SyncUrlInput" Grid.Column="1" Height="36" ToolTip="例如 https://sync.rache1gardner.com"/>
+                                    <TextBlock Grid.Row="1" Text="同步账号" VerticalAlignment="Center" Foreground="{StaticResource TextMutedBrush}"/>
+                                    <TextBox x:Name="SyncUserInput" Grid.Row="1" Grid.Column="1" Height="36"/>
+                                    <TextBlock Grid.Row="2" Text="同步密码" VerticalAlignment="Center" Foreground="{StaticResource TextMutedBrush}"/>
+                                    <PasswordBox x:Name="SyncPasswordInput" Grid.Row="2" Grid.Column="1" Height="36" Padding="11,7" Background="White" BorderBrush="{StaticResource LineBrush}" Foreground="#FF202534"/>
+                                </Grid>
+                                <WrapPanel Grid.Row="2" Margin="0,12,0,0">
+                                    <CheckBox x:Name="SyncEnabledCheck" Content="启用自动同步" Margin="0,0,18,8"/>
+                                    <CheckBox x:Name="SyncDisplayCheck" Content="外观与显示" Margin="0,0,18,8"/>
+                                    <CheckBox x:Name="SyncStrategyCheck" Content="实时策略" Margin="0,0,18,8"/>
+                                    <CheckBox x:Name="SyncFiltersCheck" Content="屏蔽规则" Margin="0,0,18,8"/>
+                                    <CheckBox x:Name="SyncRoomsCheck" Content="常用直播间" Margin="0,0,18,8"/>
+                                </WrapPanel>
+                                <WrapPanel Grid.Row="3" Margin="0,8,0,0">
+                                    <Button Content="保存并立即同步" Click="SaveAndSync_Click"/>
+                                    <Button Content="仅保存配置" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0" Click="SaveSyncConfig_Click"/>
+                                    <Button x:Name="KeepLocalButton" Content="冲突：保留本机" Margin="18,0,0,0" Visibility="Collapsed" Click="KeepLocal_Click"/>
+                                    <Button x:Name="UseRemoteButton" Content="冲突：使用远程" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0" Visibility="Collapsed" Click="UseRemote_Click"/>
+                                </WrapPanel>
+                                <TextBlock x:Name="SyncStatusText" Grid.Row="4" Margin="0,12,0,0" Foreground="{StaticResource TextMutedBrush}" TextWrapping="Wrap" Text="尚未同步"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+                            <Grid>
+                                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="220"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                <TextBlock Text="常用直播间" FontSize="16" FontWeight="SemiBold"/>
+                                <TextBlock Grid.Row="1" Margin="0,5,0,10" Foreground="{StaticResource TextMutedBrush}" Text="连接成功后自动保存；置顶房间会优先出现在主窗口下拉列表。"/>
+                                <ListBox x:Name="SavedRoomList" Grid.Row="2">
+                                    <ListBox.ItemTemplate><DataTemplate><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/><ColumnDefinition Width="60"/></Grid.ColumnDefinitions><TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center"/><TextBlock Grid.Column="1" Text="{Binding Room}" Foreground="{StaticResource TextMutedBrush}" VerticalAlignment="Center"/><TextBlock Grid.Column="2" Text="置顶" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" Visibility="{Binding IsPinned, Converter={StaticResource BooleanToVisibilityConverter}}"/></Grid></DataTemplate></ListBox.ItemTemplate>
+                                </ListBox>
+                                <Grid Grid.Row="3" Margin="0,10,0,0"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <TextBox x:Name="RoomNameInput" Height="36" ToolTip="选择直播间后输入新的显示名称"/>
+                                    <Button Grid.Column="1" Content="重命名" Margin="8,0,0,0" Click="RenameRoom_Click"/>
+                                    <Button Grid.Column="2" Content="置顶/取消" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0" Click="TogglePinRoom_Click"/>
+                                    <Button Grid.Column="3" Content="删除" Style="{StaticResource DangerButton}" Margin="8,0,0,0" Click="DeleteRoom_Click"/>
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
             </TabItem>
 
             <TabItem Header="屏蔽管理">

@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private readonly AppSettings _settings;
     private readonly HistoryStore _historyStore = new();
     private readonly MessageFilter _messageFilter;
+    private readonly SyncCoordinator _syncCoordinator;
     private BarrageRenderer? _barrageRenderer;
     private Forms.NotifyIcon? _trayIcon;
     private HwndSource? _source;
@@ -46,6 +47,8 @@ public partial class MainWindow : Window
         _settings = settings;
         _client = new BilibiliDanmakuClient(_bilibiliAccount);
         _messageFilter = new MessageFilter(_settings);
+        _syncCoordinator = new SyncCoordinator(_settings, _messageFilter,
+            () => Dispatcher.Invoke(SaveSettings), ApplySyncedSettings);
         InitializeComponent();
         _client.MessageReceived += Client_MessageReceived;
         _client.StatusChanged += Client_StatusChanged;
@@ -62,6 +65,7 @@ public partial class MainWindow : Window
         _barrageRenderer.PendingCountChanged += BarrageRenderer_PendingCountChanged;
         _barrageRenderer.StatisticsChanged += BarrageRenderer_StatisticsChanged;
         CreateTrayIcon();
+        _syncCoordinator.Start();
 
         var handle = new WindowInteropHelper(this).Handle;
         _source = HwndSource.FromHwnd(handle);
@@ -83,6 +87,7 @@ public partial class MainWindow : Window
 
     private void ApplySavedSettings()
     {
+        RefreshSavedRooms();
         RoomInput.Text = _settings.Room;
         FontSizeCombo.SelectedIndex = ClosestIndex(_settings.FontSize, 14, 18, 24);
         SpeedCombo.SelectedIndex = ClosestIndex(_settings.ScrollSpeed, 70, 110, 170);
@@ -123,6 +128,13 @@ public partial class MainWindow : Window
         if (e.Key == Key.Enter) await ConnectAsync();
     }
 
+    private void RoomInput_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (RoomInput.SelectedItem is SavedRoom saved)
+            Dispatcher.InvokeAsync(() => RoomInput.Text = saved.Room,
+                System.Windows.Threading.DispatcherPriority.Input);
+    }
+
     private async Task ConnectAsync()
     {
         var room = RoomInput.Text.Trim();
@@ -139,6 +151,7 @@ public partial class MainWindow : Window
         try
         {
             await _client.ConnectAsync(room);
+            SaveConnectedRoom(room);
         }
         catch (Exception ex)
         {
@@ -148,6 +161,51 @@ public partial class MainWindow : Window
         {
             ConnectButton.IsEnabled = true;
         }
+    }
+
+    private void SaveConnectedRoom(string room)
+    {
+        var existing = _settings.SavedRooms.FirstOrDefault(item =>
+            string.Equals(item.Room, room, StringComparison.OrdinalIgnoreCase));
+        if (existing is null) _settings.SavedRooms.Insert(0, new SavedRoom(room, room));
+        else
+        {
+            _settings.SavedRooms.Remove(existing);
+            _settings.SavedRooms.Insert(0, existing);
+        }
+        if (_settings.SavedRooms.Count > 30) _settings.SavedRooms.RemoveRange(30, _settings.SavedRooms.Count - 30);
+        RefreshSavedRooms();
+        SaveSettings();
+        _syncCoordinator.SettingsChanged();
+    }
+
+    private void RefreshSavedRooms()
+    {
+        if (RoomInput is null) return;
+        var text = RoomInput.Text;
+        RoomInput.ItemsSource = _settings.SavedRooms.OrderByDescending(room => room.IsPinned).ToArray();
+        RoomInput.Text = text;
+    }
+
+    private void ApplySyncedSettings()
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            _initializing = true;
+            ApplySavedSettings();
+            _initializing = false;
+            _barrageRenderer?.SetFontSize(_settings.FontSize);
+            _barrageRenderer?.SetScrollSpeed(_settings.ScrollSpeed);
+            _barrageRenderer?.SetContentOpacity(_settings.TextOpacity);
+            if (_barrageRenderer is not null)
+            {
+                _barrageRenderer.FreshnessSeconds = _settings.FreshnessSeconds;
+                _barrageRenderer.DuplicateWindowSeconds = _settings.DuplicateWindowSeconds;
+                _barrageRenderer.SetEnabled(_settings.DanmakuEnabled);
+            }
+            UpdateDisplayArea();
+            RefreshSavedRooms();
+        });
     }
 
     private void Client_MessageReceived(object? sender, DanmakuMessage message)
@@ -164,6 +222,7 @@ public partial class MainWindow : Window
         _barrageRenderer?.SetEnabled(_settings.DanmakuEnabled);
         UpdateDanmakuToggleButton();
         SaveSettings();
+        _syncCoordinator.SettingsChanged();
     }
 
     private void UpdateDanmakuToggleButton()
@@ -203,11 +262,12 @@ public partial class MainWindow : Window
     {
         if (_controlCenter is null || !_controlCenter.IsLoaded)
         {
-            _controlCenter = new ControlCenterWindow(_settings, _messageFilter, _historyStore, _bilibiliAccount, () =>
+            _controlCenter = new ControlCenterWindow(_settings, _messageFilter, _historyStore, _bilibiliAccount, _syncCoordinator, () =>
             {
                 _barrageRenderer!.FreshnessSeconds = _settings.FreshnessSeconds;
                 _barrageRenderer.DuplicateWindowSeconds = _settings.DuplicateWindowSeconds;
                 SaveSettings();
+                _syncCoordinator.SettingsChanged();
             }, () => { if (!string.IsNullOrWhiteSpace(RoomInput.Text)) _ = ConnectAsync(); });
         }
         _controlCenter.Show();
@@ -301,6 +361,7 @@ public partial class MainWindow : Window
         _settings.FontSize = value;
         _barrageRenderer?.SetFontSize(value);
         SaveSettings();
+        _syncCoordinator.SettingsChanged();
     }
 
     private void SpeedCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -311,6 +372,7 @@ public partial class MainWindow : Window
         _settings.ScrollSpeed = value;
         _barrageRenderer?.SetScrollSpeed(value);
         SaveSettings();
+        _syncCoordinator.SettingsChanged();
     }
 
     private void DisplayAreaCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -321,6 +383,7 @@ public partial class MainWindow : Window
         _settings.DisplayAreaPercent = value;
         UpdateDisplayArea();
         SaveSettings();
+        _syncCoordinator.SettingsChanged();
     }
 
     private void OpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -330,6 +393,7 @@ public partial class MainWindow : Window
         if (BackgroundOpacityValue is not null) BackgroundOpacityValue.Text = $"{e.NewValue:P0}";
         UpdateSurfaceColor();
         SaveSettings();
+        _syncCoordinator.SettingsChanged();
     }
 
     private void TextOpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -339,6 +403,7 @@ public partial class MainWindow : Window
         if (TextOpacityValue is not null) TextOpacityValue.Text = $"{e.NewValue:P0}";
         _barrageRenderer?.SetContentOpacity(e.NewValue);
         SaveSettings();
+        _syncCoordinator.SettingsChanged();
     }
 
     private void UpdateSurfaceColor()
@@ -432,6 +497,7 @@ public partial class MainWindow : Window
         _barrageRenderer?.Dispose();
         await _client.DisposeAsync();
         await _historyStore.DisposeAsync();
+        await _syncCoordinator.DisposeAsync();
         _bilibiliAccount.Dispose();
         _trayIcon?.Dispose();
         System.Windows.Application.Current.Shutdown();

@@ -100,6 +100,17 @@ public sealed class MessageFilter
         }
     }
 
+    public void ReplaceAll(IEnumerable<string> keywords, IEnumerable<string> users)
+    {
+        lock (_sync)
+        {
+            _settings.BlockedKeywords = keywords.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            _settings.BlockedUsers = users
+                .Where(user => user is not ("***" or "匿名"))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+    }
+
     public static string Normalize(string value)
     {
         var builder = new StringBuilder(value.Length);

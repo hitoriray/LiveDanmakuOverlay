@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("LiveDanmakuOverlay")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c9aa9dce9ef9cf4cdd0207477fb80518cc5a31b9")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+27f379d9f927fea43233ed1371e97ee504c6dba0")]
 [assembly: System.Reflection.AssemblyProductAttribute("LiveDanmakuOverlay")]
 [assembly: System.Reflection.AssemblyTitleAttribute("LiveDanmakuOverlay")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

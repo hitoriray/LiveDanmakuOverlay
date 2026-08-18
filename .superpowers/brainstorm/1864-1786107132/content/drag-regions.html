@@ -1,0 +1,31 @@
+<h2>窗口拖动区域确认</h2>
+<p class="subtitle">推荐方案：深色斜线区域都能拖动；蓝色控件保持原操作。最大化或锁定后不允许拖动。</p>
+
+<div class="mockup">
+  <div class="mockup-header">LiveDanmakuOverlay（非最大化、未锁定）</div>
+  <div class="mockup-body" style="background:#181a20;color:white;border-radius:12px;padding:16px;min-height:430px">
+    <div style="display:flex;align-items:center;gap:8px;padding:10px;background:repeating-linear-gradient(135deg,#30343d,#30343d 8px,#272b33 8px,#272b33 16px);border-radius:8px">
+      <strong style="margin-right:auto">直播弹幕　<span style="font-weight:normal;color:#aab2c0">可拖动</span></strong>
+      <button class="mock-button">弹幕开</button><button class="mock-button">功能</button><button class="mock-button">锁定</button><button class="mock-button">—</button><button class="mock-button">□</button><button class="mock-button">×</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px"><input class="mock-input" style="flex:1" value="直播间输入框（不可拖动）"><button class="mock-button">连接</button></div>
+    <div style="margin-top:12px;height:220px;border:1px dashed #788394;display:flex;align-items:center;justify-content:center;background:repeating-linear-gradient(135deg,#252a32,#252a32 10px,#1e232a 10px,#1e232a 20px)">
+      <div style="text-align:center"><div style="font-size:20px">弹幕显示区空白处</div><div style="color:#76d39b;margin-top:8px">也可以直接按住拖动窗口</div></div>
+    </div>
+    <div style="margin-top:12px;padding:12px;background:repeating-linear-gradient(135deg,#30343d,#30343d 8px,#272b33 8px,#272b33 16px);position:relative">
+      状态文字与控件之间的空白：可拖动　<select><option>字号</option></select>　<input type="range" style="width:80px">
+      <span style="position:absolute;right:3px;bottom:2px;color:#77aaff">◢ 缩放手柄</span>
+    </div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="confirm-all-background" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content"><h3>确认推荐范围</h3><p>除按钮、输入框、下拉框、滑块和缩放手柄外，其余背景全部可拖动。</p></div>
+  </div>
+  <div class="option" data-choice="toolbar-only" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content"><h3>只扩大顶部拖动区</h3><p>弹幕区域仍不可拖动，误拖风险更低，但改善有限。</p></div>
+  </div>
+</div>
