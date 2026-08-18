@@ -27,19 +27,24 @@ internal static class Program
 
     private static void TestSettingsInitialization()
     {
+        if (AppSettings.ConvertLegacyScrollSpeed(70) != 20 ||
+            AppSettings.ConvertLegacyScrollSpeed(110) != 40 ||
+            AppSettings.ConvertLegacyScrollSpeed(170) != 60)
+            throw new InvalidOperationException("旧版本地滚动速度未正确迁移为百分比");
+
         var settings = new AppSettings
         {
             BackgroundOpacity = 0.2,
             TextOpacity = 0.4,
             FontSize = 24,
-            ScrollSpeed = 170,
+            ScrollSpeedPercent = 50,
             DisplayAreaPercent = 25
         };
 
         _ = new MainWindow(settings);
 
         if (settings.BackgroundOpacity != 0.2 || settings.TextOpacity != 0.4 ||
-            settings.FontSize != 24 || settings.ScrollSpeed != 170 || settings.DisplayAreaPercent != 25)
+            settings.FontSize != 24 || settings.ScrollSpeedPercent != 50 || settings.DisplayAreaPercent != 25)
             throw new InvalidOperationException("窗口初始化覆盖了已加载的用户设置");
         Console.WriteLine("SETTINGS_INITIALIZATION_OK");
     }
@@ -272,6 +277,14 @@ internal static class Program
             SavedRooms = [new SavedRoom("房间一", "1")]
         };
         var @base = SyncPayloadConverter.FromSettings(baseSettings);
+        var legacy = SyncPayloadConverter.Normalize(@base with
+        {
+            SchemaVersion = 1,
+            Display = @base.Display with { ScrollSpeedPercent = 110 }
+        });
+        if (legacy.SchemaVersion != SyncPayloadConverter.CurrentSchemaVersion ||
+            legacy.Display.ScrollSpeedPercent != 40)
+            throw new InvalidOperationException("旧版同步滚动速度未正确迁移为百分比");
 
         var localSettings = new AppSettings
         {

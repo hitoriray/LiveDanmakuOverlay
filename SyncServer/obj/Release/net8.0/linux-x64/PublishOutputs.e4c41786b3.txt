@@ -1,2 +1,0 @@
-C:\Users\zhanghongzhi\LiveDanmakuOverlay\server-publish\libe_sqlite3.so
-C:\Users\zhanghongzhi\LiveDanmakuOverlay\server-publish\danmaku-sync-server

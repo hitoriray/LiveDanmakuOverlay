@@ -17,7 +17,7 @@ public sealed class AppSettings
     public bool HasWindowPlacement { get; set; }
     public double FontSize { get; set; } = 18;
     public double BackgroundOpacity { get; set; } = 0.45;
-    public double ScrollSpeed { get; set; } = 100;
+    public double ScrollSpeedPercent { get; set; } = 50;
     public double TextOpacity { get; set; } = 1;
     public double DisplayAreaPercent { get; set; } = 100;
     public bool DanmakuEnabled { get; set; } = true;
@@ -41,11 +41,25 @@ public sealed class AppSettings
     {
         try
         {
-            return File.Exists(FilePath)
-                ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings()
-                : new AppSettings();
+            if (!File.Exists(FilePath)) return new AppSettings();
+
+            var json = File.ReadAllText(FilePath);
+            var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+            using var document = JsonDocument.Parse(json);
+            if (!document.RootElement.TryGetProperty(nameof(ScrollSpeedPercent), out _) &&
+                document.RootElement.TryGetProperty("ScrollSpeed", out var legacySpeed) &&
+                legacySpeed.TryGetDouble(out var pixelsPerSecond))
+                settings.ScrollSpeedPercent = ConvertLegacyScrollSpeed(pixelsPerSecond);
+            return settings;
         }
         catch { return new AppSettings(); }
+    }
+
+    public static double ConvertLegacyScrollSpeed(double pixelsPerSecond)
+    {
+        var percent = pixelsPerSecond * 100.0 / BarrageRenderer.BaseScrollSpeed;
+        double[] choices = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+        return choices.MinBy(choice => Math.Abs(choice - percent));
     }
 
     public void Save()

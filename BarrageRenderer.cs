@@ -15,6 +15,11 @@ namespace LiveDanmakuOverlay;
 public sealed class BarrageRenderer : IDisposable
 {
     private const double LaneGap = 28;
+    /// <summary>滚动速度基准：100% 档位对应的像素/秒。</summary>
+    public const double BaseScrollSpeed = 300;
+    /// <summary>把百分比档位换算成实际滚动速度（像素/秒），50% 为默认档位。</summary>
+    public static double PercentToPxPerSecond(double percent) =>
+        BaseScrollSpeed * Math.Clamp(percent, 5, 200) / 100.0;
     private static readonly System.Windows.Media.FontFamily EmojiFont = new("Segoe UI Emoji");
     private static readonly HttpClient ImageHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
     private static readonly ConcurrentDictionary<string, Task<ImageSource?>> ImageCache = new();
@@ -268,6 +273,15 @@ public sealed class BarrageRenderer : IDisposable
             FontWeight = System.Windows.FontWeights.SemiBold,
             TextWrapping = System.Windows.TextWrapping.NoWrap,
             Opacity = _contentOpacity,
+        };
+        // 白色弹幕在浅色背景上会看不清，叠加一圈黑色描边，保证任何背景都可读，
+        // 同时保留深色背景上的白色观感。
+        block.Effect = new System.Windows.Media.Effects.DropShadowEffect
+        {
+            Color = System.Windows.Media.Colors.Black,
+            BlurRadius = 1.5,
+            ShadowDepth = 0,
+            Opacity = 1,
         };
         AddTextWithColorEmoji(block, text);
         TextOptions.SetTextRenderingMode(block, TextRenderingMode.Auto);

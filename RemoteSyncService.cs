@@ -4,12 +4,14 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.IO;
 
 namespace LiveDanmakuOverlay;
 
 public sealed record DisplaySyncSettings(
-    double FontSize, double BackgroundOpacity, double ScrollSpeed, double TextOpacity,
+    double FontSize, double BackgroundOpacity,
+    [property: JsonPropertyName("scrollSpeed")] double ScrollSpeedPercent, double TextOpacity,
     double DisplayAreaPercent, bool DanmakuEnabled);
 
 public sealed record StrategySyncSettings(
@@ -98,9 +100,11 @@ public sealed class RemoteSyncClient : IDisposable
 
 public static class SyncPayloadConverter
 {
+    public const int CurrentSchemaVersion = 2;
+
     public static SyncPayload FromSettings(AppSettings settings) => Normalize(new SyncPayload(
-        1,
-        new DisplaySyncSettings(settings.FontSize, settings.BackgroundOpacity, settings.ScrollSpeed,
+        CurrentSchemaVersion,
+        new DisplaySyncSettings(settings.FontSize, settings.BackgroundOpacity, settings.ScrollSpeedPercent,
             settings.TextOpacity, settings.DisplayAreaPercent, settings.DanmakuEnabled),
         new StrategySyncSettings(settings.FreshnessSeconds, settings.DuplicateWindowSeconds,
             settings.SaveBlockedMessages, settings.HistoryRetentionDays),
@@ -114,7 +118,7 @@ public static class SyncPayloadConverter
         {
             settings.FontSize = payload.Display.FontSize;
             settings.BackgroundOpacity = payload.Display.BackgroundOpacity;
-            settings.ScrollSpeed = payload.Display.ScrollSpeed;
+            settings.ScrollSpeedPercent = payload.Display.ScrollSpeedPercent;
             settings.TextOpacity = payload.Display.TextOpacity;
             settings.DisplayAreaPercent = payload.Display.DisplayAreaPercent;
             settings.DanmakuEnabled = payload.Display.DanmakuEnabled;
@@ -134,29 +138,36 @@ public static class SyncPayloadConverter
         if (settings.SyncRooms) settings.SavedRooms = [.. payload.Rooms.SavedRooms];
     }
 
-    public static SyncPayload Normalize(SyncPayload payload) => payload with
+    public static SyncPayload Normalize(SyncPayload payload)
     {
-        SchemaVersion = 1,
-        Display = payload.Display with
+        var scrollSpeedPercent = payload.SchemaVersion < CurrentSchemaVersion
+            ? AppSettings.ConvertLegacyScrollSpeed(payload.Display.ScrollSpeedPercent)
+            : payload.Display.ScrollSpeedPercent;
+
+        return payload with
         {
-            FontSize = Closest(payload.Display.FontSize, 14, 18, 24),
-            ScrollSpeed = Closest(payload.Display.ScrollSpeed, 70, 110, 170),
-            BackgroundOpacity = Math.Clamp(payload.Display.BackgroundOpacity, 0, 1),
-            TextOpacity = Math.Clamp(payload.Display.TextOpacity, 0.1, 1),
-            DisplayAreaPercent = Closest(payload.Display.DisplayAreaPercent, 10, 25, 50, 75, 100)
-        },
-        Strategy = payload.Strategy with
-        {
-            FreshnessSeconds = Math.Clamp(payload.Strategy.FreshnessSeconds, 0.2, 3),
-            DuplicateWindowSeconds = Math.Clamp(payload.Strategy.DuplicateWindowSeconds, 0.5, 8),
-            HistoryRetentionDays = payload.Strategy.HistoryRetentionDays is 0 or 7 or 30 or 90
-                ? payload.Strategy.HistoryRetentionDays : 30
-        },
-        Filters = new FilterSyncSettings(
-            Unique(payload.Filters.BlockedKeywords),
-            Unique(payload.Filters.BlockedUsers).Where(item => item is not ("***" or "匿名")).ToList()),
-        Rooms = new RoomSyncSettings(NormalizeRooms(payload.Rooms.SavedRooms))
-    };
+            SchemaVersion = CurrentSchemaVersion,
+            Display = payload.Display with
+            {
+                FontSize = Closest(payload.Display.FontSize, 14, 18, 24),
+                ScrollSpeedPercent = Closest(scrollSpeedPercent, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100),
+                BackgroundOpacity = Math.Clamp(payload.Display.BackgroundOpacity, 0, 1),
+                TextOpacity = Math.Clamp(payload.Display.TextOpacity, 0.1, 1),
+                DisplayAreaPercent = Closest(payload.Display.DisplayAreaPercent, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
+            },
+            Strategy = payload.Strategy with
+            {
+                FreshnessSeconds = Math.Clamp(payload.Strategy.FreshnessSeconds, 0.2, 3),
+                DuplicateWindowSeconds = Math.Clamp(payload.Strategy.DuplicateWindowSeconds, 0.5, 8),
+                HistoryRetentionDays = payload.Strategy.HistoryRetentionDays is 0 or 7 or 30 or 90
+                    ? payload.Strategy.HistoryRetentionDays : 30
+            },
+            Filters = new FilterSyncSettings(
+                Unique(payload.Filters.BlockedKeywords),
+                Unique(payload.Filters.BlockedUsers).Where(item => item is not ("***" or "匿名")).ToList()),
+            Rooms = new RoomSyncSettings(NormalizeRooms(payload.Rooms.SavedRooms))
+        };
+    }
 
     private static double Closest(double value, params double[] choices) =>
         choices.MinBy(choice => Math.Abs(choice - value));
@@ -195,7 +206,8 @@ public static class SyncPayloadMerger
         var display = new DisplaySyncSettings(
             MergeValue("字号", @base.Display.FontSize, local.Display.FontSize, remote.Display.FontSize, conflicts),
             MergeValue("背景透明度", @base.Display.BackgroundOpacity, local.Display.BackgroundOpacity, remote.Display.BackgroundOpacity, conflicts),
-            MergeValue("滚动速度", @base.Display.ScrollSpeed, local.Display.ScrollSpeed, remote.Display.ScrollSpeed, conflicts),
+            MergeValue("滚动速度", @base.Display.ScrollSpeedPercent, local.Display.ScrollSpeedPercent,
+                remote.Display.ScrollSpeedPercent, conflicts),
             MergeValue("文字透明度", @base.Display.TextOpacity, local.Display.TextOpacity, remote.Display.TextOpacity, conflicts),
             MergeValue("显示区域", @base.Display.DisplayAreaPercent, local.Display.DisplayAreaPercent, remote.Display.DisplayAreaPercent, conflicts),
             MergeValue("弹幕开关", @base.Display.DanmakuEnabled, local.Display.DanmakuEnabled, remote.Display.DanmakuEnabled, conflicts));
@@ -211,7 +223,8 @@ public static class SyncPayloadMerger
         var rooms = MergeRooms(@base.Rooms.SavedRooms, local.Rooms.SavedRooms, remote.Rooms.SavedRooms, conflicts);
 
         if (conflicts.Count > 0) return new SyncMergeResult(null, conflicts);
-        return new SyncMergeResult(SyncPayloadConverter.Normalize(new SyncPayload(1, display, strategy,
+        return new SyncMergeResult(SyncPayloadConverter.Normalize(new SyncPayload(
+            SyncPayloadConverter.CurrentSchemaVersion, display, strategy,
             new FilterSyncSettings(keywords, users), new RoomSyncSettings(rooms))), conflicts);
     }
 

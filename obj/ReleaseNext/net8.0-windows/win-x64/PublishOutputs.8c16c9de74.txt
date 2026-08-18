@@ -1,3 +1,0 @@
-C:\Users\zhanghongzhi\LiveDanmakuOverlay\publish-latest\LiveDanmakuOverlay.pdb
-C:\Users\zhanghongzhi\LiveDanmakuOverlay\publish-latest\e_sqlite3.dll
-C:\Users\zhanghongzhi\LiveDanmakuOverlay\publish-latest\LiveDanmakuOverlay.exe
