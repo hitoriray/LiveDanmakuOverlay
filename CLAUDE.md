@@ -11,7 +11,7 @@
 
 1. ✅ 同步服务已部署：`systemctl status danmaku-sync` active，监听 127.0.0.1:5091。
 2. ✅ `https://sync.rache1gardner.com/health` 公网返回 `{"status":"ok"}`。
-3. ✅ 公司电脑客户端已配置同步（账号 `danmaku`，密码在服务器 `/etc/danmaku-sync.env` 与本机 DPAPI `accounts\sync.dat`，不在 Git）。
+3. ✅ 公司电脑客户端已配置同步（账号密码 2026-08-20 已改为用户自定义，见服务器 `/etc/danmaku-sync.env` 与本机 DPAPI `accounts\sync.dat`，不在 Git）。
 4. ✅ SSH 已恢复安全配置（密码登录关闭），`ssh danmaku-server` 别名可用专用密钥直连。
 
 剩余待办（需用户参与）：
