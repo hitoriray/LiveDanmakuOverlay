@@ -20,6 +20,7 @@ public sealed class AppSettings
     public double ScrollSpeedPercent { get; set; } = 50;
     public double TextOpacity { get; set; } = 1;
     public double DisplayAreaPercent { get; set; } = 100;
+    public DanmakuDensity Density { get; set; } = DanmakuDensity.Standard;
     public bool DanmakuEnabled { get; set; } = true;
     public double FreshnessSeconds { get; set; } = 1;
     public double DuplicateWindowSeconds { get; set; } = 2;
@@ -71,6 +72,13 @@ public sealed class AppSettings
         }
         catch { /* Settings failure should never stop the overlay. */ }
     }
+}
+
+public enum DanmakuDensity
+{
+    Standard = 0,
+    Comfortable = 1,
+    Dense = 2
 }
 
 public sealed record SavedRoom(string Name, string Room, bool IsPinned = false)

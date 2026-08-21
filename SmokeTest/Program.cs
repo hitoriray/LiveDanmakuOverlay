@@ -20,6 +20,8 @@ internal static class Program
         TestConnectionAsync(args.FirstOrDefault() ?? "6").GetAwaiter().GetResult();
         TestQrLoginAsync().GetAwaiter().GetResult();
         TestBarrageRenderer();
+        TestAdaptiveBarrageSpeed();
+        TestOverlayMovementDoesNotResize();
         TestHistoryAndFilterAsync().GetAwaiter().GetResult();
         TestSyncMerge();
         Console.WriteLine("SMOKE_TEST_OK");
@@ -138,65 +140,65 @@ internal static class Program
             throw new InvalidOperationException("Windows Emoji 渲染结果不是彩色图层");
         if (WindowsEmojiRenderer.CountOpaqueColors("👨‍👩‍👧‍👦", 24) < 8)
             throw new InvalidOperationException("Windows 组合 Emoji 渲染失败");
-        var canvas = new Canvas { Width = 600, Height = 120, ClipToBounds = true };
-        canvas.Measure(new Size(600, 120));
-        canvas.Arrange(new Rect(0, 0, 600, 120));
-        using var renderer = new BarrageRenderer(canvas, 18, 100, 0.65) { FreshnessSeconds = 0.01 };
+        BarrageStatistics? latestStats = null;
+        using var renderer = new BarrageRenderer(18, 100, 0.65) { FreshnessSeconds = 5 };
+        renderer.StatisticsChanged += (_, stats) => latestStats = stats;
+        renderer.SetBounds(0, 0, 2560, 720, true);
         for (var index = 0; index < 1000; index++)
             renderer.Enqueue(new DanmakuMessage($"不应显示的用户名{index}", $"滚动弹幕测试 {index}"));
-        if (canvas.Children.Count < 2)
-            throw new InvalidOperationException("滚动弹幕没有填充分轨");
-        if (!canvas.ClipToBounds)
-            throw new InvalidOperationException("弹幕区域没有启用边界裁剪");
-        renderer.ProcessFrame(TimeSpan.FromSeconds(1));
-        var movingElement = canvas.Children.Cast<FrameworkElement>().First();
-        var transform = (System.Windows.Media.TranslateTransform)movingElement.RenderTransform;
-        if (!transform.HasAnimatedProperties)
-            throw new InvalidOperationException("弹幕没有使用独立合成动画");
-        var beforeStall = transform.X;
-        renderer.ProcessFrame(TimeSpan.FromSeconds(3));
-        if (beforeStall - transform.X > 3.5)
-            throw new InvalidOperationException("UI 卡顿后弹幕发生补偿性加速");
+        PumpDispatcherUntil(() => renderer.ActiveCount >= 2);
+        if (!renderer.UsesDirectComposition || renderer.ActiveCount < 2)
+            throw new InvalidOperationException($"滚动弹幕没有填充分轨 active={renderer.ActiveCount} pending={renderer.PendingCount}");
+        latestStats = null;
+        PumpDispatcherUntil(() => latestStats is { FramesPerSecond: > 0 });
+        Console.WriteLine($"DIRECTCOMPOSITION_BENCHMARK={latestStats!.FramesPerSecond:F1}fps/{latestStats.AverageDrawMilliseconds:F2}ms@2560x720");
+        if (latestStats.FramesPerSecond < 45)
+            throw new InvalidOperationException($"DirectComposition 全宽渲染帧率异常：{latestStats.FramesPerSecond:F1} fps");
+        renderer.FreshnessSeconds = 0.01;
         Thread.Sleep(30);
-        renderer.ProcessFrame(TimeSpan.FromSeconds(3.05));
+        PumpDispatcherUntil(() => renderer.PendingCount == 0);
         if (renderer.TotalAccepted != 1000 ||
             renderer.TotalAccepted != renderer.TotalLaunched + renderer.TotalMerged + renderer.TotalExpired + renderer.PendingCount)
             throw new InvalidOperationException("实时调度统计不守恒");
         if (renderer.PendingCount != 0 || renderer.TotalExpired == 0)
             throw new InvalidOperationException("过期弹幕仍在队列中造成延迟");
-        if (canvas.Children.OfType<TextBlock>().Any(block => block.Text.Contains("用户名", StringComparison.Ordinal)))
-            throw new InvalidOperationException("滚动区域仍然显示了用户名");
-        if (canvas.Children.Cast<FrameworkElement>().Any(element => Math.Abs(element.Opacity - 0.65) > 0.01))
-            throw new InvalidOperationException("弹幕透明度没有生效");
-        var emojiCanvas = new Canvas { Width = 600, Height = 80, ClipToBounds = true };
-        emojiCanvas.Measure(new Size(600, 80));
-        emojiCanvas.Arrange(new Rect(0, 0, 600, 80));
-        using var emojiRenderer = new BarrageRenderer(emojiCanvas, 18, 100, 1);
-        emojiRenderer.Enqueue(new DanmakuMessage("用户", "中文🧩👨‍👩‍👧‍👦"));
-        var emojiBlock = emojiCanvas.Children.OfType<TextBlock>().Single();
-        var emojiContainers = emojiBlock.Inlines.OfType<InlineUIContainer>()
-            .Select(inline => (Grid)inline.Child).ToArray();
-        if (emojiContainers.Length != 2)
-            throw new InvalidOperationException("标准 Emoji 未转换为 Windows 彩色图片");
-        if (emojiContainers.Any(container => container.Children.OfType<System.Windows.Controls.Image>().Single().Source is not null ||
-                                             container.Children.OfType<TextBlock>().Single().Visibility != Visibility.Visible))
-            throw new InvalidOperationException("未缓存 Emoji 没有先显示字体回退");
-
-        WindowsEmojiRenderer.GetOrRenderAsync("🧩", 18).GetAwaiter().GetResult();
-        WindowsEmojiRenderer.GetOrRenderAsync("👨‍👩‍👧‍👦", 18).GetAwaiter().GetResult();
-        PumpDispatcherUntil(() => emojiContainers.All(container =>
-            container.Children.OfType<System.Windows.Controls.Image>().Single().Visibility == Visibility.Visible));
-        if (emojiContainers.Any(container => container.Children.OfType<TextBlock>().Single().Visibility != Visibility.Collapsed))
-            throw new InvalidOperationException("彩色 Emoji 完成后没有隐藏字体回退");
-        emojiRenderer.SetEnabled(false);
-        emojiRenderer.Enqueue(new DanmakuMessage("用户", "关闭期间不应显示"));
-        if (emojiCanvas.Children.Count != 0 || emojiRenderer.TotalExpired == 0)
+        renderer.SetEnabled(false);
+        renderer.Enqueue(new DanmakuMessage("用户", "关闭期间不应显示"));
+        PumpDispatcherUntil(() => renderer.ActiveCount == 0);
+        if (renderer.TotalExpired == 0)
             throw new InvalidOperationException("关闭弹幕后仍显示或堆积弹幕");
-        emojiRenderer.SetEnabled(true);
-        emojiRenderer.Enqueue(new DanmakuMessage("用户", "重新开启后显示"));
-        if (emojiCanvas.Children.Count == 0)
+        renderer.SetEnabled(true);
+        renderer.SetBounds(0, 0, 2560, 720, true);
+        renderer.Enqueue(new DanmakuMessage("用户", "重新开启后显示"));
+        PumpDispatcherUntil(() => renderer.ActiveCount > 0);
+        if (renderer.ActiveCount == 0)
             throw new InvalidOperationException("重新开启弹幕后未恢复显示");
         Console.WriteLine($"BARRAGE_RENDERER_OK · accepted={renderer.TotalAccepted} · displayed={renderer.TotalLaunched} · expired={renderer.TotalExpired} · pending={renderer.PendingCount}");
+    }
+
+    private static void TestAdaptiveBarrageSpeed()
+    {
+        const double viewport = 2560;
+        const double selectedSpeed = 300;
+        var shortSpeed = NativeCompositionOverlay.CalculateSpeed(viewport, 100, selectedSpeed);
+        var longSpeed = NativeCompositionOverlay.CalculateSpeed(viewport, 900, selectedSpeed);
+        if (longSpeed <= shortSpeed)
+            throw new InvalidOperationException("长弹幕没有自动获得更高的滚动速度");
+        var shortDuration = (viewport + 100) / shortSpeed;
+        var longDuration = (viewport + 900) / longSpeed;
+        if (Math.Abs(shortDuration - longDuration) > 0.001)
+            throw new InvalidOperationException("不同长度弹幕的通过时长不一致");
+        Console.WriteLine($"ADAPTIVE_SPEED_OK · short={shortSpeed:F1}px/s · long={longSpeed:F1}px/s · duration={shortDuration:F1}s");
+    }
+
+    private static void TestOverlayMovementDoesNotResize()
+    {
+        if (NativeCompositionOverlay.RequiresSurfaceResize(1200, 500, 1200, 500))
+            throw new InvalidOperationException("纯窗口移动被误判为渲染表面尺寸变化");
+        if (!NativeCompositionOverlay.RequiresSurfaceResize(1200, 500, 1201, 500) ||
+            !NativeCompositionOverlay.RequiresSurfaceResize(1200, 500, 1200, 501))
+            throw new InvalidOperationException("真实区域尺寸变化没有触发渲染表面调整");
+        Console.WriteLine("OVERLAY_MOVE_PRESERVES_BARRAGES_OK");
     }
 
     private static void PumpDispatcherUntil(Func<bool> condition)

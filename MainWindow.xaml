@@ -9,6 +9,7 @@
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ResizeMode="CanResizeWithGrip"
         Loaded="Window_Loaded" Closing="Window_Closing" StateChanged="Window_StateChanged"
+        LocationChanged="Window_LocationChanged" IsVisibleChanged="Window_IsVisibleChanged"
         PreviewMouseLeftButtonDown="Window_MouseLeftButtonDown" PreviewMouseMove="Window_MouseMove"
         PreviewMouseLeftButtonUp="Window_MouseLeftButtonUp" LostMouseCapture="Window_LostMouseCapture">
     <Window.Resources>
@@ -79,6 +80,8 @@
                 <TextBlock x:Name="StatusText" Text="尚未连接" Foreground="#BFFFFFFF" FontSize="12"
                            TextTrimming="CharacterEllipsis" Margin="0,0,0,5"/>
                 <WrapPanel Orientation="Horizontal">
+                    <Button x:Name="StressTestButton" Content="弹幕压测" Click="StressTestButton_Click"
+                            Style="{StaticResource SmallButton}" Margin="0,0,9,0" ToolTip="持续生成测试弹幕，再点一次停止"/>
                     <TextBlock Text="字号" Foreground="#BFFFFFFF" VerticalAlignment="Center" Margin="0,0,4,0"/>
                     <ComboBox x:Name="FontSizeCombo" Width="58" Height="25" SelectionChanged="FontSizeCombo_SelectionChanged">
                         <ComboBoxItem Content="小" Tag="14"/><ComboBoxItem Content="中" Tag="18"/><ComboBoxItem Content="大" Tag="24"/>
@@ -96,6 +99,11 @@
                         <ComboBoxItem Content="40%" Tag="40"/><ComboBoxItem Content="50%" Tag="50"/><ComboBoxItem Content="60%" Tag="60"/>
                         <ComboBoxItem Content="70%" Tag="70"/><ComboBoxItem Content="80%" Tag="80"/><ComboBoxItem Content="90%" Tag="90"/>
                         <ComboBoxItem Content="100%" Tag="100"/>
+                    </ComboBox>
+                    <TextBlock Text="密度" Foreground="#BFFFFFFF" VerticalAlignment="Center" Margin="9,0,4,0"/>
+                    <ComboBox x:Name="DensityCombo" Width="68" Height="25" SelectionChanged="DensityCombo_SelectionChanged">
+                        <ComboBoxItem Content="舒适" Tag="Comfortable"/><ComboBoxItem Content="标准" Tag="Standard"/>
+                        <ComboBoxItem Content="密集" Tag="Dense"/>
                     </ComboBox>
                     <TextBlock Text="背景" Foreground="#BFFFFFFF" VerticalAlignment="Center" Margin="9,0,4,0"/>
                     <Slider x:Name="OpacitySlider" Width="55" Minimum="0" Maximum="1" Value="0.5"

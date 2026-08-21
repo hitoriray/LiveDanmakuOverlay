@@ -12,7 +12,7 @@ namespace LiveDanmakuOverlay;
 public sealed record DisplaySyncSettings(
     double FontSize, double BackgroundOpacity,
     [property: JsonPropertyName("scrollSpeed")] double ScrollSpeedPercent, double TextOpacity,
-    double DisplayAreaPercent, bool DanmakuEnabled);
+    double DisplayAreaPercent, bool DanmakuEnabled, DanmakuDensity Density = DanmakuDensity.Standard);
 
 public sealed record StrategySyncSettings(
     double FreshnessSeconds, double DuplicateWindowSeconds, bool SaveBlockedMessages,
@@ -100,12 +100,12 @@ public sealed class RemoteSyncClient : IDisposable
 
 public static class SyncPayloadConverter
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public static SyncPayload FromSettings(AppSettings settings) => Normalize(new SyncPayload(
         CurrentSchemaVersion,
         new DisplaySyncSettings(settings.FontSize, settings.BackgroundOpacity, settings.ScrollSpeedPercent,
-            settings.TextOpacity, settings.DisplayAreaPercent, settings.DanmakuEnabled),
+            settings.TextOpacity, settings.DisplayAreaPercent, settings.DanmakuEnabled, settings.Density),
         new StrategySyncSettings(settings.FreshnessSeconds, settings.DuplicateWindowSeconds,
             settings.SaveBlockedMessages, settings.HistoryRetentionDays),
         new FilterSyncSettings([.. settings.BlockedKeywords], [.. settings.BlockedUsers]),
@@ -122,6 +122,7 @@ public static class SyncPayloadConverter
             settings.TextOpacity = payload.Display.TextOpacity;
             settings.DisplayAreaPercent = payload.Display.DisplayAreaPercent;
             settings.DanmakuEnabled = payload.Display.DanmakuEnabled;
+            settings.Density = payload.Display.Density;
         }
         if (settings.SyncStrategySettings)
         {
@@ -140,7 +141,7 @@ public static class SyncPayloadConverter
 
     public static SyncPayload Normalize(SyncPayload payload)
     {
-        var scrollSpeedPercent = payload.SchemaVersion < CurrentSchemaVersion
+        var scrollSpeedPercent = payload.SchemaVersion < 2
             ? AppSettings.ConvertLegacyScrollSpeed(payload.Display.ScrollSpeedPercent)
             : payload.Display.ScrollSpeedPercent;
 
@@ -153,7 +154,8 @@ public static class SyncPayloadConverter
                 ScrollSpeedPercent = Closest(scrollSpeedPercent, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100),
                 BackgroundOpacity = Math.Clamp(payload.Display.BackgroundOpacity, 0, 1),
                 TextOpacity = Math.Clamp(payload.Display.TextOpacity, 0.1, 1),
-                DisplayAreaPercent = Closest(payload.Display.DisplayAreaPercent, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
+                DisplayAreaPercent = Closest(payload.Display.DisplayAreaPercent, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100),
+                Density = Enum.IsDefined(payload.Display.Density) ? payload.Display.Density : DanmakuDensity.Standard
             },
             Strategy = payload.Strategy with
             {
@@ -210,7 +212,8 @@ public static class SyncPayloadMerger
                 remote.Display.ScrollSpeedPercent, conflicts),
             MergeValue("文字透明度", @base.Display.TextOpacity, local.Display.TextOpacity, remote.Display.TextOpacity, conflicts),
             MergeValue("显示区域", @base.Display.DisplayAreaPercent, local.Display.DisplayAreaPercent, remote.Display.DisplayAreaPercent, conflicts),
-            MergeValue("弹幕开关", @base.Display.DanmakuEnabled, local.Display.DanmakuEnabled, remote.Display.DanmakuEnabled, conflicts));
+            MergeValue("弹幕开关", @base.Display.DanmakuEnabled, local.Display.DanmakuEnabled, remote.Display.DanmakuEnabled, conflicts),
+            MergeValue("弹幕密度", @base.Display.Density, local.Display.Density, remote.Display.Density, conflicts));
         var strategy = new StrategySyncSettings(
             MergeValue("弹幕新鲜度", @base.Strategy.FreshnessSeconds, local.Strategy.FreshnessSeconds, remote.Strategy.FreshnessSeconds, conflicts),
             MergeValue("重复合并窗口", @base.Strategy.DuplicateWindowSeconds, local.Strategy.DuplicateWindowSeconds, remote.Strategy.DuplicateWindowSeconds, conflicts),

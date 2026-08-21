@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 
 namespace LiveDanmakuOverlay;
@@ -39,6 +40,8 @@ public partial class MainWindow : Window
     private double _dragStartLeft;
     private double _dragStartTop;
     private bool _initializing = true;
+    private readonly DispatcherTimer _stressTestTimer;
+    private int _stressTestSequence;
 
     public MainWindow() : this(AppSettings.Load()) { }
 
@@ -49,6 +52,11 @@ public partial class MainWindow : Window
         _messageFilter = new MessageFilter(_settings);
         _syncCoordinator = new SyncCoordinator(_settings, _messageFilter,
             () => Dispatcher.Invoke(SaveSettings), ApplySyncedSettings);
+        _stressTestTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(100)
+        };
+        _stressTestTimer.Tick += StressTestTimer_Tick;
         InitializeComponent();
         _client.MessageReceived += Client_MessageReceived;
         _client.StatusChanged += Client_StatusChanged;
@@ -58,13 +66,15 @@ public partial class MainWindow : Window
     {
         ApplySavedSettings();
         _initializing = false;
-        _barrageRenderer = new BarrageRenderer(BarrageCanvas, _settings.FontSize,
-            BarrageRenderer.PercentToPxPerSecond(_settings.ScrollSpeedPercent), _settings.TextOpacity);
+        _barrageRenderer = new BarrageRenderer(_settings.FontSize,
+            BarrageRenderer.PercentToPxPerSecond(_settings.ScrollSpeedPercent), _settings.TextOpacity, Dispatcher);
         _barrageRenderer.SetEnabled(_settings.DanmakuEnabled);
+        _barrageRenderer.SetDensity(_settings.Density);
         _barrageRenderer.FreshnessSeconds = _settings.FreshnessSeconds;
         _barrageRenderer.DuplicateWindowSeconds = _settings.DuplicateWindowSeconds;
         _barrageRenderer.PendingCountChanged += BarrageRenderer_PendingCountChanged;
         _barrageRenderer.StatisticsChanged += BarrageRenderer_StatisticsChanged;
+        UpdateNativeOverlayBounds();
         CreateTrayIcon();
         _syncCoordinator.Start();
 
@@ -93,6 +103,12 @@ public partial class MainWindow : Window
         FontSizeCombo.SelectedIndex = ClosestIndex(_settings.FontSize, 14, 18, 24);
         SpeedCombo.SelectedIndex = ClosestIndex(_settings.ScrollSpeedPercent, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100);
         DisplayAreaCombo.SelectedIndex = ClosestIndex(_settings.DisplayAreaPercent, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100);
+        DensityCombo.SelectedIndex = _settings.Density switch
+        {
+            DanmakuDensity.Comfortable => 0,
+            DanmakuDensity.Dense => 2,
+            _ => 1
+        };
         OpacitySlider.Value = Math.Clamp(Math.Round(_settings.BackgroundOpacity * 10, MidpointRounding.AwayFromZero) / 10, 0, 1);
         TextOpacitySlider.Value = Math.Clamp(Math.Round(_settings.TextOpacity * 10, MidpointRounding.AwayFromZero) / 10, 0.1, 1);
 
@@ -199,6 +215,7 @@ public partial class MainWindow : Window
             _barrageRenderer?.SetScrollSpeed(
                 BarrageRenderer.PercentToPxPerSecond(_settings.ScrollSpeedPercent));
             _barrageRenderer?.SetContentOpacity(_settings.TextOpacity);
+            _barrageRenderer?.SetDensity(_settings.Density);
             if (_barrageRenderer is not null)
             {
                 _barrageRenderer.FreshnessSeconds = _settings.FreshnessSeconds;
@@ -222,9 +239,60 @@ public partial class MainWindow : Window
     {
         _settings.DanmakuEnabled = !_settings.DanmakuEnabled;
         _barrageRenderer?.SetEnabled(_settings.DanmakuEnabled);
+        UpdateNativeOverlayBounds();
         UpdateDanmakuToggleButton();
         SaveSettings();
         _syncCoordinator.SettingsChanged();
+    }
+
+    private void StressTestButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_stressTestTimer.IsEnabled)
+        {
+            _stressTestTimer.Stop();
+            StressTestButton.Content = "弹幕压测";
+            StressTestButton.ToolTip = "持续生成测试弹幕，再点一次停止";
+            return;
+        }
+
+        if (_barrageRenderer is null) return;
+        if (!_settings.DanmakuEnabled)
+        {
+            _settings.DanmakuEnabled = true;
+            _barrageRenderer.SetEnabled(true);
+            UpdateDanmakuToggleButton();
+            UpdateNativeOverlayBounds();
+        }
+        EnqueueStressMessages(32);
+        _stressTestTimer.Start();
+        StressTestButton.Content = "停止压测";
+        StressTestButton.ToolTip = "停止生成测试弹幕；已在屏幕上的弹幕会自然滚完";
+    }
+
+    private void StressTestTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_barrageRenderer is null || _barrageRenderer.PendingCount >= 24) return;
+        EnqueueStressMessages(4);
+    }
+
+    private void EnqueueStressMessages(int count)
+    {
+        if (_barrageRenderer is null) return;
+        string[] samples =
+        [
+            "短弹幕",
+            "这是一条普通长度的性能测试弹幕",
+            "高速滚动流畅度测试 1234567890",
+            "这是一条比较长的弹幕，用来观察铺满弹道以后高速滚动是否仍然稳定",
+            "彩色表情测试 😀 🎮 ✨",
+            "WPF 透明窗口弹幕渲染压力测试"
+        ];
+        for (var index = 0; index < count; index++)
+        {
+            var sequence = ++_stressTestSequence;
+            var text = $"{samples[sequence % samples.Length]} · {sequence}";
+            _barrageRenderer.Enqueue(new DanmakuMessage("本地压测", text));
+        }
     }
 
     private void UpdateDanmakuToggleButton()
@@ -246,7 +314,8 @@ public partial class MainWindow : Window
 
     private void BarrageRenderer_StatisticsChanged(object? sender, BarrageStatistics stats)
     {
-        StatusText.Text = $"{_connectionStatus} · 收到 {stats.Received} / 显示 {stats.Displayed} / 合并 {stats.Merged} / 跳过 {stats.Expired}";
+        StatusText.Text = $"{_connectionStatus} · GPU {stats.FramesPerSecond:F0} fps / 帧 {stats.AverageDrawMilliseconds:F1} ms" +
+                          $" · 收到 {stats.Received} / 显示 {stats.Displayed} / 合并 {stats.Merged} / 跳过 {stats.Expired}";
     }
 
     private void UpdateStatusText(int pendingCount)
@@ -288,6 +357,7 @@ public partial class MainWindow : Window
         SetClickThrough(locked);
         _settings.IsLocked = locked;
         SaveSettings();
+        Dispatcher.InvokeAsync(UpdateNativeOverlayBounds, DispatcherPriority.Loaded);
     }
 
     private void SetClickThrough(bool enabled)
@@ -321,6 +391,11 @@ public partial class MainWindow : Window
         ResizeThumb.Visibility = maximized || _isLocked ? Visibility.Collapsed : Visibility.Visible;
         Dispatcher.InvokeAsync(UpdateDisplayArea, System.Windows.Threading.DispatcherPriority.Loaded);
     }
+
+    private void Window_LocationChanged(object? sender, EventArgs e) => UpdateNativeOverlayBounds();
+
+    private void Window_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e) =>
+        UpdateNativeOverlayBounds();
 
     private void Window_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
@@ -388,6 +463,16 @@ public partial class MainWindow : Window
         _syncCoordinator.SettingsChanged();
     }
 
+    private void DensityCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_initializing || DensityCombo.SelectedItem is not System.Windows.Controls.ComboBoxItem item ||
+            !Enum.TryParse<DanmakuDensity>(item.Tag?.ToString(), out var density)) return;
+        _settings.Density = density;
+        _barrageRenderer?.SetDensity(density);
+        SaveSettings();
+        _syncCoordinator.SettingsChanged();
+    }
+
     private void OpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_initializing) return;
@@ -434,6 +519,30 @@ public partial class MainWindow : Window
             BarrageCanvas.Height = Math.Max(1, hostHeight * percent);
         }
         _barrageRenderer?.RefreshLanes();
+        Dispatcher.InvokeAsync(UpdateNativeOverlayBounds, DispatcherPriority.Loaded);
+    }
+
+    private void UpdateNativeOverlayBounds()
+    {
+        if (_barrageRenderer is null || BarrageCanvas is null || !BarrageCanvas.IsLoaded) return;
+        var visible = IsVisible && WindowState != WindowState.Minimized && _settings.DanmakuEnabled;
+        if (!visible || BarrageCanvas.ActualWidth <= 0 || BarrageCanvas.ActualHeight <= 0)
+        {
+            _barrageRenderer.SetBounds(0, 0, 1, 1, false);
+            return;
+        }
+        try
+        {
+            var origin = BarrageCanvas.PointToScreen(new System.Windows.Point(0, 0));
+            var dpi = VisualTreeHelper.GetDpi(BarrageCanvas);
+            _barrageRenderer.SetBounds((int)Math.Round(origin.X), (int)Math.Round(origin.Y),
+                Math.Max(1, (int)Math.Round(BarrageCanvas.ActualWidth * dpi.DpiScaleX)),
+                Math.Max(1, (int)Math.Round(BarrageCanvas.ActualHeight * dpi.DpiScaleY)), true);
+        }
+        catch (InvalidOperationException)
+        {
+            _barrageRenderer.SetBounds(0, 0, 1, 1, false);
+        }
     }
 
     private void ResizeThumb_DragDelta(object sender, System.Windows.Controls.Primitives.DragDeltaEventArgs e)
@@ -495,6 +604,7 @@ public partial class MainWindow : Window
     private async Task ExitAsync()
     {
         _allowClose = true;
+        _stressTestTimer.Stop();
         SaveSettings();
         _barrageRenderer?.Dispose();
         await _client.DisposeAsync();
