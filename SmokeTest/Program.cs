@@ -18,6 +18,7 @@ internal static class Program
         TestWindowDragPolicy();
         TestWindowResizeHitTesting();
         TestAsyncEmojiRendering().GetAwaiter().GetResult();
+        TestBilibiliEmoticonTexture();
         TestConnectionAsync(args.FirstOrDefault() ?? "6").GetAwaiter().GetResult();
         TestQrLoginAsync().GetAwaiter().GetResult();
         TestBarrageRenderer();
@@ -159,6 +160,8 @@ internal static class Program
             throw new InvalidOperationException("Windows 组合 Emoji 渲染失败");
         BarrageStatistics? latestStats = null;
         using var renderer = new BarrageRenderer(18, 100, 0.65) { FreshnessSeconds = 5 };
+        if (renderer.OverlayAcceptsInput)
+            throw new InvalidOperationException("DirectComposition 弹幕窗口仍会接收鼠标输入");
         renderer.StatisticsChanged += (_, stats) => latestStats = stats;
         renderer.SetBounds(0, 0, 2560, 720, true);
         for (var index = 0; index < 1000; index++)
@@ -191,6 +194,19 @@ internal static class Program
         if (renderer.ActiveCount == 0)
             throw new InvalidOperationException("重新开启弹幕后未恢复显示");
         Console.WriteLine($"BARRAGE_RENDERER_OK · accepted={renderer.TotalAccepted} · displayed={renderer.TotalLaunched} · expired={renderer.TotalExpired} · pending={renderer.PendingCount}");
+    }
+
+    private static void TestBilibiliEmoticonTexture()
+    {
+        using var source = new SkiaSharp.SKBitmap(20, 10, SkiaSharp.SKColorType.Bgra8888,
+            SkiaSharp.SKAlphaType.Premul);
+        source.Erase(SkiaSharp.SKColors.Magenta);
+        using var image = SkiaSharp.SKImage.FromBitmap(source);
+        using var encoded = image.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
+        using var rendered = NativeCompositionOverlay.RenderEmoticonBitmap(encoded.ToArray(), 200, 100, 18);
+        if (rendered is null || rendered.Width != 52 || rendered.Height != 26)
+            throw new InvalidOperationException("B站表情图片没有按声明比例生成 GPU 纹理");
+        Console.WriteLine("BILIBILI_EMOTICON_TEXTURE_OK");
     }
 
     private static void TestAdaptiveBarrageSpeed()

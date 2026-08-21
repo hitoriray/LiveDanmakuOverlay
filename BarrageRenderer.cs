@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Threading;
@@ -45,6 +46,7 @@ public sealed class BarrageRenderer : IDisposable
     public double DuplicateWindowSeconds { get; set; } = 2;
     internal int ActiveCount => _overlay.ActiveCount;
     internal bool UsesDirectComposition => true;
+    internal bool OverlayAcceptsInput => _overlay.AcceptsInput;
     public event EventHandler<int>? PendingCountChanged;
     public event EventHandler<BarrageStatistics>? StatisticsChanged;
 
@@ -62,6 +64,7 @@ public sealed class BarrageRenderer : IDisposable
     {
         Interlocked.Increment(ref _totalAccepted);
         if (!_enabled) { Interlocked.Increment(ref _totalExpired); return; }
+        NativeCompositionOverlay.PrimeEmoticon(message.EmoticonUrl);
         var nowTicks = DateTime.UtcNow.Ticks;
         var key = MessageFilter.Normalize(message.Text);
         if (key.Length > 0 && _recentMessages.TryGetValue(key, out var previous) &&
@@ -145,14 +148,20 @@ public sealed class BarrageRenderer : IDisposable
 
 internal sealed class NativeCompositionOverlay : IDisposable
 {
-    private const uint WsPopup = 0x80000000, WsExTopmost = 8, WsExTransparent = 0x20, WsExToolWindow = 0x80,
+    private const uint WsPopup = 0x80000000, WsDisabled = 0x08000000,
+        WsExTopmost = 8, WsExTransparent = 0x20, WsExToolWindow = 0x80,
         WsExNoActivate = 0x08000000, WsExNoRedirectionBitmap = 0x00200000, SwpNoActivate = 0x10, SwpShowWindow = 0x40,
         PmRemove = 1;
+    private const uint WmNcHitTest = 0x0084;
+    private const int HtTransparent = -1;
     private const int SwHide = 0, SwShowNoActivate = 4;
     private static readonly IntPtr HwndTopmost = new(-1);
     private static readonly SKTypeface TextTypeface = SKTypeface.FromFamilyName("Microsoft YaHei UI", SKFontStyle.Bold) ?? SKTypeface.Default;
     private static readonly SKTypeface EmojiTypeface = SKTypeface.FromFamilyName("Segoe UI Emoji") ?? SKTypeface.Default;
-    private static readonly WndProc WindowProcedure = (hwnd, message, wParam, lParam) => DefWindowProc(hwnd, message, wParam, lParam);
+    private static readonly HttpClient EmoticonHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static readonly ConcurrentDictionary<string, Task<byte[]?>> EmoticonCache = new(StringComparer.Ordinal);
+    private static readonly WndProc WindowProcedure = (hwnd, message, wParam, lParam) =>
+        message == WmNcHitTest ? new IntPtr(HtTransparent) : DefWindowProc(hwnd, message, wParam, lParam);
     private readonly Func<int, IReadOnlyList<BarrageRenderer.PendingMessage>> _takePending;
     private readonly Action<int> _launched, _expired;
     private readonly AutoResetEvent _wake = new(false);
@@ -160,15 +169,17 @@ internal sealed class NativeCompositionOverlay : IDisposable
     private readonly Thread _thread;
     private readonly object _stateLock = new();
     private BoundsState _bounds;
-    private bool _boundsDirty, _settingsDirty, _enabled = true, _disposed;
+    private bool _boundsDirty, _fontSizeDirty, _enabled = true, _disposed;
     private double _fontSize, _scrollSpeed, _opacity, _framesPerSecond, _averageDrawMilliseconds;
     private DanmakuDensity _density = DanmakuDensity.Standard;
     private int _activeCount;
+    private IntPtr _windowHandle;
     private Exception? _startupError;
     public int ActiveCount => Volatile.Read(ref _activeCount);
     public double FramesPerSecond => Volatile.Read(ref _framesPerSecond);
     public double AverageDrawMilliseconds => Volatile.Read(ref _averageDrawMilliseconds);
     public double ScrollSpeed { get { lock (_stateLock) return _scrollSpeed; } }
+    public bool AcceptsInput => _windowHandle != IntPtr.Zero && IsWindowEnabled(_windowHandle);
 
     public NativeCompositionOverlay(Func<int, IReadOnlyList<BarrageRenderer.PendingMessage>> takePending,
         double fontSize, double scrollSpeed, double opacity, Action<int> launched, Action<int> expired)
@@ -183,6 +194,10 @@ internal sealed class NativeCompositionOverlay : IDisposable
     }
 
     public void Wake() => _wake.Set();
+    public static void PrimeEmoticon(string? url)
+    {
+        if (!string.IsNullOrWhiteSpace(url)) _ = EmoticonCache.GetOrAdd(url, DownloadEmoticonAsync);
+    }
     public void SetBounds(int x, int y, int width, int height, bool visible)
     {
         var requested = new BoundsState(x, y, Math.Max(1, width), Math.Max(1, height), visible);
@@ -194,12 +209,12 @@ internal sealed class NativeCompositionOverlay : IDisposable
         }
         _wake.Set();
     }
-    public void SetFontSize(double value) { lock (_stateLock) { _fontSize = value; _settingsDirty = true; } _wake.Set(); }
+    public void SetFontSize(double value) { lock (_stateLock) { _fontSize = value; _fontSizeDirty = true; } _wake.Set(); }
     public void SetScrollSpeed(double value) { lock (_stateLock) _scrollSpeed = value; _wake.Set(); }
     public void SetContentOpacity(double value) { lock (_stateLock) _opacity = Math.Clamp(value, .1, 1); _wake.Set(); }
-    public void SetDensity(DanmakuDensity value) { lock (_stateLock) { _density = value; _settingsDirty = true; } _wake.Set(); }
-    public void RefreshLanes() { lock (_stateLock) _settingsDirty = true; _wake.Set(); }
-    public void SetEnabled(bool value) { lock (_stateLock) { _enabled = value; _settingsDirty = true; } _wake.Set(); }
+    public void SetDensity(DanmakuDensity value) { lock (_stateLock) _density = value; _wake.Set(); }
+    public void RefreshLanes() => _wake.Set();
+    public void SetEnabled(bool value) { lock (_stateLock) _enabled = value; _wake.Set(); }
 
     private void RenderThread()
     {
@@ -208,6 +223,7 @@ internal sealed class NativeCompositionOverlay : IDisposable
         {
             using var graphics = new CompositionGraphics();
             hwnd = CreateOverlayWindow();
+            _windowHandle = hwnd;
             graphics.Initialize(hwnd, 1, 1);
             _started.Set();
             var active = new List<ActiveBarrage>();
@@ -220,11 +236,12 @@ internal sealed class NativeCompositionOverlay : IDisposable
             while (!_disposed)
             {
                 PumpMessages();
-                bool boundsDirty, settingsDirty, enabled; double fontSize, speed, opacity; DanmakuDensity density; BoundsState requested;
+                bool boundsDirty, fontSizeDirty, enabled; double fontSize, speed, opacity; DanmakuDensity density; BoundsState requested;
                 lock (_stateLock)
                 {
-                    boundsDirty = _boundsDirty; settingsDirty = _settingsDirty; requested = _bounds; enabled = _enabled;
-                    fontSize = _fontSize; speed = _scrollSpeed; opacity = _opacity; density = _density; _boundsDirty = _settingsDirty = false;
+                    boundsDirty = _boundsDirty; fontSizeDirty = _fontSizeDirty; requested = _bounds; enabled = _enabled;
+                    fontSize = _fontSize; speed = _scrollSpeed; opacity = _opacity; density = _density;
+                    _boundsDirty = _fontSizeDirty = false;
                 }
                 if (boundsDirty)
                 {
@@ -234,13 +251,10 @@ internal sealed class NativeCompositionOverlay : IDisposable
                         SwpNoActivate | (requested.Visible ? SwpShowWindow : 0));
                     ShowWindow(hwnd, requested.Visible ? SwShowNoActivate : SwHide);
                     if (sizeChanged)
-                    {
                         graphics.Resize(requested.Width, requested.Height);
-                        Clear(active, lanes);
-                    }
                     current = requested;
                 }
-                if (settingsDirty) Clear(active, lanes);
+                if (fontSizeDirty) RebuildActiveTextures(active, graphics, fontSize);
                 if (!enabled || !current.Visible)
                 { if (active.Count > 0) Clear(active, lanes); Volatile.Write(ref _activeCount, 0); _wake.WaitOne(100); lastFrame = Stopwatch.GetTimestamp(); continue; }
 
@@ -262,21 +276,22 @@ internal sealed class NativeCompositionOverlay : IDisposable
                     if (item.Lane < lanes.Count && ReferenceEquals(lanes[item.Lane], item)) lanes[item.Lane] = null;
                     item.Texture.Dispose();
                 }
+                foreach (var item in active)
+                    TryUpgradeEmoticon(item, graphics, fontSize);
                 var laneHeight = Math.Max(1, fontSize + spacing.Vertical);
                 var required = Math.Max(1, (int)Math.Floor(current.Height / laneHeight));
                 while (lanes.Count < required) lanes.Add(null);
-                if (lanes.Count > required) lanes.RemoveRange(required, lanes.Count - required);
                 var launched = 0;
                 while (launched < 4)
                 {
-                    var lane = FindLane(lanes, active, current.Width, spacing.Horizontal);
+                    var lane = FindLane(lanes, required, active, current.Width, spacing.Horizontal);
                     if (lane < 0) { _takePending(0); break; }
                     var next = _takePending(1);
                     if (next.Count == 0) break;
                     var pending = next[0];
-                    using var pixels = RenderTextTexture(pending.Message.Text, fontSize);
+                    using var pixels = CreateInitialTexture(pending.Message, fontSize, out var awaitingEmoticon);
                     var item = new ActiveBarrage(graphics.CreateSprite(pixels), pixels.Width, pixels.Height,
-                        current.Width, lane, lanes[lane]);
+                        current.Width, lane, lanes[lane], pending.Message, awaitingEmoticon);
                     active.Add(item); lanes[lane] = item; launched++;
                 }
                 if (launched > 0) _launched(launched);
@@ -293,7 +308,7 @@ internal sealed class NativeCompositionOverlay : IDisposable
             Clear(active, lanes);
         }
         catch (Exception ex) { _startupError = ex; _started.Set(); }
-        finally { if (hwnd != IntPtr.Zero) DestroyWindow(hwnd); }
+        finally { _windowHandle = IntPtr.Zero; if (hwnd != IntPtr.Zero) DestroyWindow(hwnd); }
     }
 
     internal static double CalculateSpeed(double viewportWidth, double textWidth, double selectedPixelsPerSecond)
@@ -312,8 +327,9 @@ internal sealed class NativeCompositionOverlay : IDisposable
         _ => new DensitySpacing(13, 48)
     };
 
-    private static int FindLane(List<ActiveBarrage?> lanes, List<ActiveBarrage> active, int width, double horizontalGap)
-    { for (var i = 0; i < lanes.Count; i++) { var last = lanes[i]; if (last is null || !active.Contains(last) || last.X + last.Width + horizontalGap < width) return i; } return -1; }
+    private static int FindLane(List<ActiveBarrage?> lanes, int availableLaneCount,
+        List<ActiveBarrage> active, int width, double horizontalGap)
+    { for (var i = 0; i < availableLaneCount; i++) { var last = lanes[i]; if (last is null || !active.Contains(last) || last.X + last.Width + horizontalGap < width) return i; } return -1; }
 
     private static SKBitmap RenderTextTexture(string text, double requestedSize)
     {
@@ -331,6 +347,93 @@ internal sealed class NativeCompositionOverlay : IDisposable
             canvas.DrawShapedText(shaper, run.Text, x, baseline, outline); canvas.DrawShapedText(shaper, run.Text, x, baseline, fill); x += run.Width;
         }
         canvas.Flush(); return bitmap;
+    }
+
+    private static SKBitmap CreateInitialTexture(DanmakuMessage message, double fontSize, out bool awaitingEmoticon)
+    {
+        if (TryRenderEmoticon(message, fontSize, out var emoticon, out awaitingEmoticon)) return emoticon!;
+        return RenderTextTexture(message.Text, fontSize);
+    }
+
+    private static void TryUpgradeEmoticon(ActiveBarrage item, CompositionGraphics graphics, double fontSize)
+    {
+        if (!item.AwaitingEmoticon) return;
+        if (!TryRenderEmoticon(item.Message, fontSize, out var bitmap, out var awaiting))
+        {
+            item.AwaitingEmoticon = awaiting;
+            return;
+        }
+        using (bitmap)
+        {
+            var replacement = graphics.CreateSprite(bitmap!);
+            var previous = item.Texture;
+            item.Texture = replacement;
+            item.Width = bitmap!.Width;
+            item.Height = bitmap.Height;
+            item.AwaitingEmoticon = false;
+            previous.Dispose();
+        }
+    }
+
+    private static bool TryRenderEmoticon(DanmakuMessage message, double fontSize, out SKBitmap? result,
+        out bool awaiting)
+    {
+        result = null;
+        awaiting = false;
+        if (string.IsNullOrWhiteSpace(message.EmoticonUrl)) return false;
+        var task = EmoticonCache.GetOrAdd(message.EmoticonUrl, DownloadEmoticonAsync);
+        if (!task.IsCompleted)
+        {
+            awaiting = true;
+            return false;
+        }
+        byte[]? bytes;
+        try { bytes = task.GetAwaiter().GetResult(); }
+        catch { return false; }
+        if (bytes is null) return false;
+        result = RenderEmoticonBitmap(bytes, message.EmoticonWidth, message.EmoticonHeight, fontSize);
+        return result is not null;
+    }
+
+    internal static SKBitmap? RenderEmoticonBitmap(byte[] bytes, int declaredWidth, int declaredHeight,
+        double fontSize)
+    {
+        using var source = SKBitmap.Decode(bytes);
+        if (source is null || source.Width <= 0 || source.Height <= 0) return null;
+        var targetHeight = Math.Max(1, (int)Math.Ceiling(fontSize + 8));
+        var ratio = declaredWidth > 0 && declaredHeight > 0
+            ? Math.Clamp((double)declaredWidth / declaredHeight, .5, 5)
+            : Math.Clamp((double)source.Width / source.Height, .5, 5);
+        var targetWidth = Math.Max(1, (int)Math.Round(targetHeight * ratio));
+        var result = new SKBitmap(targetWidth, targetHeight, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var canvas = new SKCanvas(result);
+        canvas.Clear(SKColors.Transparent);
+        using var paint = new SKPaint { IsAntialias = true, FilterQuality = SKFilterQuality.High };
+        canvas.DrawBitmap(source, new SKRect(0, 0, targetWidth, targetHeight), paint);
+        canvas.Flush();
+        return result;
+    }
+
+    private static async Task<byte[]?> DownloadEmoticonAsync(string url)
+    {
+        try { return await EmoticonHttp.GetByteArrayAsync(url).ConfigureAwait(false); }
+        catch { return null; }
+    }
+
+    private static void RebuildActiveTextures(IEnumerable<ActiveBarrage> active, CompositionGraphics graphics,
+        double fontSize)
+    {
+        foreach (var item in active)
+        {
+            using var bitmap = CreateInitialTexture(item.Message, fontSize, out var awaitingEmoticon);
+            var replacement = graphics.CreateSprite(bitmap);
+            var previous = item.Texture;
+            item.Texture = replacement;
+            item.Width = bitmap.Width;
+            item.Height = bitmap.Height;
+            item.AwaitingEmoticon = awaitingEmoticon;
+            previous.Dispose();
+        }
     }
 
     private static List<TextRun> BuildRuns(string text, float size)
@@ -358,14 +461,25 @@ internal sealed class NativeCompositionOverlay : IDisposable
         var wc = new WndClassEx { Size = (uint)Marshal.SizeOf<WndClassEx>(), Instance = module, ClassName = name, WindowProc = Marshal.GetFunctionPointerForDelegate(WindowProcedure) };
         if (RegisterClassEx(ref wc) == 0) throw new System.ComponentModel.Win32Exception();
         var hwnd = CreateWindowEx(WsExTopmost | WsExTransparent | WsExToolWindow | WsExNoActivate | WsExNoRedirectionBitmap,
-            name, "LiveDanmakuOverlay.DirectComposition", WsPopup, 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, module, IntPtr.Zero);
+            name, "LiveDanmakuOverlay.DirectComposition", WsPopup | WsDisabled, 0, 0, 1, 1,
+            IntPtr.Zero, IntPtr.Zero, module, IntPtr.Zero);
         if (hwnd == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(); return hwnd;
     }
     private static void PumpMessages() { while (PeekMessage(out var msg, IntPtr.Zero, 0, 0, PmRemove)) { TranslateMessage(ref msg); DispatchMessage(ref msg); } }
     public void Dispose() { if (_disposed) return; _disposed = true; _wake.Set(); _thread.Join(TimeSpan.FromSeconds(3)); _wake.Dispose(); _started.Dispose(); }
     private sealed record TextRun(string Text, SKTypeface Typeface, float Width);
-    private sealed class ActiveBarrage(ID2D1Bitmap1 texture, int width, int height, double x, int lane, ActiveBarrage? leader)
-    { public ID2D1Bitmap1 Texture { get; } = texture; public int Width { get; } = width; public int Height { get; } = height; public double X { get; set; } = x; public int Lane { get; } = lane; public ActiveBarrage? Leader { get; } = leader; }
+    private sealed class ActiveBarrage(ID2D1Bitmap1 texture, int width, int height, double x, int lane,
+        ActiveBarrage? leader, DanmakuMessage message, bool awaitingEmoticon)
+    {
+        public ID2D1Bitmap1 Texture { get; set; } = texture;
+        public int Width { get; set; } = width;
+        public int Height { get; set; } = height;
+        public double X { get; set; } = x;
+        public int Lane { get; } = lane;
+        public ActiveBarrage? Leader { get; } = leader;
+        public DanmakuMessage Message { get; } = message;
+        public bool AwaitingEmoticon { get; set; } = awaitingEmoticon;
+    }
     private readonly record struct DensitySpacing(double Vertical, double Horizontal);
     private readonly record struct BoundsState(int X, int Y, int Width, int Height, bool Visible);
 
@@ -447,6 +561,7 @@ internal sealed class NativeCompositionOverlay : IDisposable
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr CreateWindowEx(uint exStyle, string className, string title, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
     [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int command);
+    [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr hwnd);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern IntPtr DefWindowProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] private static extern bool PeekMessage(out NativeMessage message, IntPtr hwnd, uint min, uint max, uint remove);
