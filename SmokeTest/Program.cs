@@ -16,6 +16,7 @@ internal static class Program
         TestSettingsInitialization();
         TestWindowPlacement();
         TestWindowDragPolicy();
+        TestWindowResizeHitTesting();
         TestAsyncEmojiRendering().GetAwaiter().GetResult();
         TestConnectionAsync(args.FirstOrDefault() ?? "6").GetAwaiter().GetResult();
         TestQrLoginAsync().GetAwaiter().GetResult();
@@ -87,6 +88,22 @@ internal static class Program
             WindowDragPolicy.CanStart(new Grid(), false, WindowState.Normal, MouseButtonState.Released))
             throw new InvalidOperationException("锁定、最大化或未按下左键时仍允许拖动");
         Console.WriteLine("WINDOW_DRAG_POLICY_OK");
+    }
+
+    private static void TestWindowResizeHitTesting()
+    {
+        const int left = 100, top = 200, right = 500, bottom = 700, border = 8;
+        if (MainWindow.GetResizeHitTest(101, 201, left, top, right, bottom, border) != 13 ||
+            MainWindow.GetResizeHitTest(499, 201, left, top, right, bottom, border) != 14 ||
+            MainWindow.GetResizeHitTest(101, 699, left, top, right, bottom, border) != 16 ||
+            MainWindow.GetResizeHitTest(499, 699, left, top, right, bottom, border) != 17 ||
+            MainWindow.GetResizeHitTest(101, 400, left, top, right, bottom, border) != 10 ||
+            MainWindow.GetResizeHitTest(499, 400, left, top, right, bottom, border) != 11 ||
+            MainWindow.GetResizeHitTest(300, 201, left, top, right, bottom, border) != 12 ||
+            MainWindow.GetResizeHitTest(300, 699, left, top, right, bottom, border) != 15 ||
+            MainWindow.GetResizeHitTest(300, 400, left, top, right, bottom, border) != 0)
+            throw new InvalidOperationException("窗口八方向缩放命中区域计算错误");
+        Console.WriteLine("WINDOW_RESIZE_HIT_TEST_OK");
     }
 
     private static async Task TestAsyncEmojiRendering()

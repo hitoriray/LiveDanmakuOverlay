@@ -14,6 +14,15 @@ public partial class MainWindow : Window
     private const int HotkeyToggleVisibility = 0x4101;
     private const int HotkeyToggleLock = 0x4102;
     private const int WmHotkey = 0x0312;
+    private const int WmNcHitTest = 0x0084;
+    private const int HtLeft = 10;
+    private const int HtRight = 11;
+    private const int HtTop = 12;
+    private const int HtTopLeft = 13;
+    private const int HtTopRight = 14;
+    private const int HtBottom = 15;
+    private const int HtBottomLeft = 16;
+    private const int HtBottomRight = 17;
     private const int GwlExStyle = -20;
     private const int WsExTransparent = 0x00000020;
     private const int WsExNoActivate = 0x08000000;
@@ -592,6 +601,20 @@ public partial class MainWindow : Window
 
     private IntPtr WindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        if (msg == WmNcHitTest && !_isLocked && WindowState == WindowState.Normal &&
+            GetWindowRect(hwnd, out var rect))
+        {
+            var packed = lParam.ToInt64();
+            var pointerX = unchecked((short)(packed & 0xFFFF));
+            var pointerY = unchecked((short)((packed >> 16) & 0xFFFF));
+            var border = Math.Max(6, (int)Math.Round(8 * GetDpiForWindow(hwnd) / 96.0));
+            var hit = GetResizeHitTest(pointerX, pointerY, rect.Left, rect.Top, rect.Right, rect.Bottom, border);
+            if (hit != 0)
+            {
+                handled = true;
+                return new IntPtr(hit);
+            }
+        }
         if (msg == WmHotkey)
         {
             if (wParam.ToInt32() == HotkeyToggleVisibility) ToggleVisibility();
@@ -599,6 +622,24 @@ public partial class MainWindow : Window
             handled = true;
         }
         return IntPtr.Zero;
+    }
+
+    internal static int GetResizeHitTest(int pointerX, int pointerY, int left, int top, int right, int bottom,
+        int border)
+    {
+        var onLeft = pointerX >= left && pointerX < left + border;
+        var onRight = pointerX < right && pointerX >= right - border;
+        var onTop = pointerY >= top && pointerY < top + border;
+        var onBottom = pointerY < bottom && pointerY >= bottom - border;
+        if (onTop && onLeft) return HtTopLeft;
+        if (onTop && onRight) return HtTopRight;
+        if (onBottom && onLeft) return HtBottomLeft;
+        if (onBottom && onRight) return HtBottomRight;
+        if (onLeft) return HtLeft;
+        if (onRight) return HtRight;
+        if (onTop) return HtTop;
+        if (onBottom) return HtBottom;
+        return 0;
     }
 
     private async Task ExitAsync()
@@ -649,4 +690,15 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongW")] private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int newLong);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out NativeRect rect);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hWnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
 }
