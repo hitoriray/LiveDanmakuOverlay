@@ -53,7 +53,7 @@ public sealed class BarrageRenderer : IDisposable
     public BarrageRenderer(double fontSize, double scrollSpeed, double contentOpacity = 1, Dispatcher? dispatcher = null)
     {
         var uiDispatcher = dispatcher ?? Dispatcher.CurrentDispatcher;
-        _overlay = new NativeCompositionOverlay(TakePending, fontSize, scrollSpeed, contentOpacity,
+        _overlay = new NativeCompositionOverlay(TakePending, fontSize, scrollSpeed, contentOpacity, uiDispatcher,
             count => Interlocked.Add(ref _totalLaunched, count), count => Interlocked.Add(ref _totalExpired, count));
         _statisticsTimer = new DispatcherTimer(DispatcherPriority.Background, uiDispatcher) { Interval = TimeSpan.FromSeconds(1) };
         _statisticsTimer.Tick += StatisticsTimer_Tick;
@@ -148,13 +148,14 @@ public sealed class BarrageRenderer : IDisposable
 
 internal sealed class NativeCompositionOverlay : IDisposable
 {
-    private const uint WsPopup = 0x80000000, WsDisabled = 0x08000000,
-        WsExTopmost = 8, WsExTransparent = 0x20, WsExToolWindow = 0x80,
+    private const uint WsPopup = 0x80000000,
+        WsExTopmost = 8, WsExTransparent = 0x20, WsExToolWindow = 0x80, WsExLayered = 0x00080000,
         WsExNoActivate = 0x08000000, WsExNoRedirectionBitmap = 0x00200000, SwpNoActivate = 0x10, SwpShowWindow = 0x40,
         PmRemove = 1;
     private const uint WmNcHitTest = 0x0084;
     private const int HtTransparent = -1;
     private const int SwHide = 0, SwShowNoActivate = 4;
+    private const uint LwaAlpha = 0x00000002;
     private static readonly IntPtr HwndTopmost = new(-1);
     private static readonly SKTypeface TextTypeface = SKTypeface.FromFamilyName("Microsoft YaHei UI", SKFontStyle.Bold) ?? SKTypeface.Default;
     private static readonly SKTypeface EmojiTypeface = SKTypeface.FromFamilyName("Segoe UI Emoji") ?? SKTypeface.Default;
@@ -167,6 +168,7 @@ internal sealed class NativeCompositionOverlay : IDisposable
     private readonly AutoResetEvent _wake = new(false);
     private readonly ManualResetEventSlim _started = new(false);
     private readonly Thread _thread;
+    private readonly Dispatcher _uiDispatcher;
     private readonly object _stateLock = new();
     private BoundsState _bounds;
     private bool _boundsDirty, _fontSizeDirty, _enabled = true, _disposed;
@@ -182,10 +184,15 @@ internal sealed class NativeCompositionOverlay : IDisposable
     public bool AcceptsInput => _windowHandle != IntPtr.Zero && IsWindowEnabled(_windowHandle);
 
     public NativeCompositionOverlay(Func<int, IReadOnlyList<BarrageRenderer.PendingMessage>> takePending,
-        double fontSize, double scrollSpeed, double opacity, Action<int> launched, Action<int> expired)
+        double fontSize, double scrollSpeed, double opacity, Dispatcher uiDispatcher,
+        Action<int> launched, Action<int> expired)
     {
         _takePending = takePending; _fontSize = fontSize; _scrollSpeed = scrollSpeed; _opacity = opacity;
+        _uiDispatcher = uiDispatcher;
         _launched = launched; _expired = expired;
+        _windowHandle = _uiDispatcher.CheckAccess()
+            ? CreateOverlayWindow()
+            : _uiDispatcher.Invoke(CreateOverlayWindow);
         _thread = new Thread(RenderThread) { IsBackground = true, Name = "DirectComposition Danmaku" };
         _thread.SetApartmentState(ApartmentState.STA);
         _thread.Start();
@@ -218,12 +225,10 @@ internal sealed class NativeCompositionOverlay : IDisposable
 
     private void RenderThread()
     {
-        IntPtr hwnd = IntPtr.Zero;
+        var hwnd = _windowHandle;
         try
         {
             using var graphics = new CompositionGraphics();
-            hwnd = CreateOverlayWindow();
-            _windowHandle = hwnd;
             graphics.Initialize(hwnd, 1, 1);
             _started.Set();
             var active = new List<ActiveBarrage>();
@@ -235,7 +240,6 @@ internal sealed class NativeCompositionOverlay : IDisposable
             long drawTicks = 0;
             while (!_disposed)
             {
-                PumpMessages();
                 bool boundsDirty, fontSizeDirty, enabled; double fontSize, speed, opacity; DanmakuDensity density; BoundsState requested;
                 lock (_stateLock)
                 {
@@ -308,7 +312,7 @@ internal sealed class NativeCompositionOverlay : IDisposable
             Clear(active, lanes);
         }
         catch (Exception ex) { _startupError = ex; _started.Set(); }
-        finally { _windowHandle = IntPtr.Zero; if (hwnd != IntPtr.Zero) DestroyWindow(hwnd); }
+        finally { }
     }
 
     internal static double CalculateSpeed(double viewportWidth, double textWidth, double selectedPixelsPerSecond)
@@ -460,13 +464,31 @@ internal sealed class NativeCompositionOverlay : IDisposable
         var name = $"LiveDanmakuDirectComposition_{Environment.ProcessId}"; var module = GetModuleHandle(null);
         var wc = new WndClassEx { Size = (uint)Marshal.SizeOf<WndClassEx>(), Instance = module, ClassName = name, WindowProc = Marshal.GetFunctionPointerForDelegate(WindowProcedure) };
         if (RegisterClassEx(ref wc) == 0) throw new System.ComponentModel.Win32Exception();
-        var hwnd = CreateWindowEx(WsExTopmost | WsExTransparent | WsExToolWindow | WsExNoActivate | WsExNoRedirectionBitmap,
-            name, "LiveDanmakuOverlay.DirectComposition", WsPopup | WsDisabled, 0, 0, 1, 1,
+        var hwnd = CreateWindowEx(WsExTopmost | WsExTransparent | WsExToolWindow | WsExLayered |
+            WsExNoActivate | WsExNoRedirectionBitmap,
+            name, "LiveDanmakuOverlay.DirectComposition", WsPopup, 0, 0, 1, 1,
             IntPtr.Zero, IntPtr.Zero, module, IntPtr.Zero);
-        if (hwnd == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(); return hwnd;
+        if (hwnd == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+        if (!SetLayeredWindowAttributes(hwnd, 0, 255, LwaAlpha))
+            throw new System.ComponentModel.Win32Exception();
+        return hwnd;
     }
-    private static void PumpMessages() { while (PeekMessage(out var msg, IntPtr.Zero, 0, 0, PmRemove)) { TranslateMessage(ref msg); DispatchMessage(ref msg); } }
-    public void Dispose() { if (_disposed) return; _disposed = true; _wake.Set(); _thread.Join(TimeSpan.FromSeconds(3)); _wake.Dispose(); _started.Dispose(); }
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _wake.Set();
+        _thread.Join(TimeSpan.FromSeconds(3));
+        var hwnd = _windowHandle;
+        _windowHandle = IntPtr.Zero;
+        if (hwnd != IntPtr.Zero)
+        {
+            if (_uiDispatcher.CheckAccess()) DestroyWindow(hwnd);
+            else _uiDispatcher.Invoke(() => DestroyWindow(hwnd));
+        }
+        _wake.Dispose();
+        _started.Dispose();
+    }
     private sealed record TextRun(string Text, SKTypeface Typeface, float Width);
     private sealed class ActiveBarrage(ID2D1Bitmap1 texture, int width, int height, double x, int lane,
         ActiveBarrage? leader, DanmakuMessage message, bool awaitingEmoticon)
@@ -561,6 +583,7 @@ internal sealed class NativeCompositionOverlay : IDisposable
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr CreateWindowEx(uint exStyle, string className, string title, uint style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr parameter);
     [DllImport("user32.dll")] private static extern bool DestroyWindow(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int command);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint colorKey, byte alpha, uint flags);
     [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr hwnd);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern IntPtr DefWindowProc(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);

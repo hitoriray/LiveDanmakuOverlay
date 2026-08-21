@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private const int HtBottom = 15;
     private const int HtBottomLeft = 16;
     private const int HtBottomRight = 17;
+    private const int HtTransparent = -1;
     private const int GwlExStyle = -20;
     private const int WsExTransparent = 0x00000020;
     private const int WsExNoActivate = 0x08000000;
@@ -614,6 +615,11 @@ public partial class MainWindow : Window
                 handled = true;
                 return new IntPtr(hit);
             }
+            if (IsPointInBarrageArea(pointerX, pointerY))
+            {
+                handled = true;
+                return new IntPtr(HtTransparent);
+            }
         }
         if (msg == WmHotkey)
         {
@@ -622,6 +628,21 @@ public partial class MainWindow : Window
             handled = true;
         }
         return IntPtr.Zero;
+    }
+
+    private bool IsPointInBarrageArea(int pointerX, int pointerY)
+    {
+        if (BarrageCanvas is null || !BarrageCanvas.IsLoaded || BarrageCanvas.ActualWidth <= 0 ||
+            BarrageCanvas.ActualHeight <= 0) return false;
+        try
+        {
+            var origin = BarrageCanvas.PointToScreen(new System.Windows.Point(0, 0));
+            var dpi = VisualTreeHelper.GetDpi(BarrageCanvas);
+            var right = origin.X + BarrageCanvas.ActualWidth * dpi.DpiScaleX;
+            var bottom = origin.Y + BarrageCanvas.ActualHeight * dpi.DpiScaleY;
+            return pointerX >= origin.X && pointerX < right && pointerY >= origin.Y && pointerY < bottom;
+        }
+        catch (InvalidOperationException) { return false; }
     }
 
     internal static int GetResizeHitTest(int pointerX, int pointerY, int left, int top, int right, int bottom,
